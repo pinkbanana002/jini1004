@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>쿠팡 로켓배송 자동화</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>🚀 쿠팡 로켓배송 자동화</h1>
+<nav class="menu">
+                <button class="menu-item" data-menu="stage1">
+                    <span class="menu-badge">1</span>
+                    <span class="menu-label">
+                        <strong>1단계</strong>
+                        <small>구글시트 작성</small>
+                    </span>
+                </button>
+
+                <button class="menu-item" data-menu="stage2" disabled>
+                    <span class="menu-badge">2</span>
+                    <span class="menu-label">
+                        <strong>2단계</strong>
+                        <small>상품 등록</small>
+                    </span>
+                    <span class="menu-lock">🔒</span>
+                </button>
+
+                <div class="menu-divider"></div>
+
+                <button class="menu-item" data-menu="category">
+                    <span class="menu-icon">🗂️</span>
+                    <span class="menu-label">
+                        <strong>카테고리 추가 등록</strong>
+                        <small>다른 카테고리로 재등록</small>
+                    </span>
+                </button>
+
+                <div class="menu-divider"></div>
+
+                <button class="menu-item" data-menu="settings">
+                    <span class="menu-icon">⚙️</span>
+                    <span class="menu-label">설정</span>
+                </button>
+
+                <div class="menu-divider"></div>
+
+                <button class="menu-item-external" id="goContentStudio" title="새 탭에서 열림">
+                    <span class="menu-icon">🍰</span>
+                    <span class="menu-label">
+                        <strong>컨텐츠 스튜디오로 <span class="menu-external-arrow">↗</span></strong>
+                        <small>이미지/사이즈표/상세페이지</small>
+                    </span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <span id="server-status" class="status-dot">●</span>
+                <span id="server-status-text">서버 연결 중...</span>
+            </div>
+        </aside>
+
+        <main class="main-panel">
+            <div id="panel-content" class="panel-content">
+                <div class="welcome">
+                    <h2>환영합니다 👋</h2>
+                    <p>왼쪽 메뉴에서 실행할 작업을 선택하세요.</p>
+                    <ul class="guide">
+                        <li>처음이신가요? <strong>⚙️ 설정</strong>부터 시작하세요.</li>
+                        <li>1단계를 먼저 완료해야 2단계 버튼이 열립니다.</li>
+                        <li>실행 중에는 다른 메뉴가 잠깁니다.</li>
+                    </ul>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

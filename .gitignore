@@ -1,0 +1,34 @@
+# 환경 변수 (서플라이허브 ID/PW · Gemini API 키 등)
+.env
+webapp/.env
+*.env
+!.env.example
+
+# credentials / keys
+key.json
+credentials.json
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Chrome profile (세션 유지용 로컬 데이터)
+chrome_profile/
+
+# Downloads / 실행 결과물
+temp_downloads/
+완료된_상품/
+webapp/logs/
+webapp/_backups/
+
+# OS
+.DS_Store
+Thumbs.db

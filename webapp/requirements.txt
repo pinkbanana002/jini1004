@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+python-multipart
+websockets
+gspread
+oauth2client
+pandas
+requests
+Pillow
+selenium
+webdriver-manager
+gspread-dataframe
+undetected-chromedriver
+openpyxl
+google-generativeai
+deep-translator
