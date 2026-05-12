@@ -607,7 +607,7 @@ function connectStage2WS() {
         if (msg.type === "log") appendStage2Log(msg.msg, msg.level);
         else if (msg.type === "progress") updateStage2Progress(msg);
         else if (msg.type === "counter") updateStage2Counter({ current: msg.current, limit: msg.limit });
-        else if (msg.type === "gate") handleStage2Gate(msg.name);
+        else if (msg.type === "gate") handleStage2Gate(msg.name, msg.payload);
         else if (msg.type === "done") handleStage2Done(msg);
         else if (msg.type === "snapshot") {
             state.stage2Running = msg.running;
@@ -616,7 +616,7 @@ function connectStage2WS() {
             updateStage2Counter(msg.counter, msg.progress);
             // 새로고침/재접속 시 대기 중인 게이트 복원
             if (msg.pending_gate && !document.getElementById("quote-gate-modal")) {
-                handleStage2Gate(msg.pending_gate);
+                handleStage2Gate(msg.pending_gate, msg.pending_gate_payload);
             }
             updateMenuLocks();
         }
@@ -705,40 +705,51 @@ async function stopStage2() {
     } catch (e) { showToast("중지 실패: " + e.message, "error"); }
 }
 
-function handleStage2Gate(name) {
+function handleStage2Gate(name, payload) {
     if (name !== "quote_ready") return;
-    showQuoteGateModal();
+    showQuoteGateModal(payload || { files: [], count: 0 });
 }
 
-function showQuoteGateModal() {
+// 견적서 확인 모달 20260512:
+// 카테고리 추가등록 팝업(showCategoryQuotationModal)과 동일한 UI 로 통일.
+// buildQuotationFileCard / revealPath / openPath 그대로 재사용.
+// 체크박스 게이트는 제거됨 — 폴더 열기 / 엑셀로 열기로 검수 흐름 일원화.
+function showQuoteGateModal(payload) {
     if (document.getElementById("quote-gate-modal")) return;
+    const files = Array.isArray(payload?.files) ? payload.files : [];
+    const count = payload?.count ?? files.length;
+
     const modal = document.createElement("div");
     modal.id = "quote-gate-modal";
     modal.className = "modal-overlay";
     modal.innerHTML = `
         <div class="modal-box">
-            <h2>📋 견적서 확인</h2>
+            <h2>📋 견적서 수정 후 등록 시작</h2>
             <p class="modal-desc">
-                엑셀 견적서가 저장되었습니다.<br>
-                엑셀에서 내용을 확인/수정 후 체크해주세요.
+                ✅ <strong>${count}</strong>개 견적서가 상품 폴더에 저장됐어요.
             </p>
-
-            <label class="check-row">
-                <input type="checkbox" class="check-item" id="quote-check1">
-                <span><strong>① 견적서 수정 확인</strong></span>
-            </label>
-
+            <div id="quote-gate-files" style="max-height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;margin:12px 0;"></div>
+            <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;font-size:13px;color:#92400e;margin-bottom:12px;line-height:1.5;">
+                💡 엑셀에서 <strong>카테고리/가격/옵션</strong> 등을 확인·수정한 후
+                <strong>저장(Ctrl+S)</strong>하세요. 저장이 안 된 상태로 진행하면 빈 견적서가 업로드됩니다.
+            </div>
             <div class="modal-actions">
-                <button id="btn-quote-later" class="btn-secondary">나중에</button>
-                <button id="btn-quote-proceed" class="btn-primary" disabled>쿠팡 등록 시작 →</button>
+                <button id="btn-quote-cancel" class="btn-secondary">❌ 취소</button>
+                <button id="btn-quote-proceed" class="btn-primary">✅ 수정 완료 → 등록 시작</button>
             </div>
         </div>`;
     document.body.appendChild(modal);
 
-    const box = document.getElementById("quote-check1");
-    const proceed = document.getElementById("btn-quote-proceed");
-    box.addEventListener("change", () => { proceed.disabled = !box.checked; });
-    document.getElementById("btn-quote-later").addEventListener("click", () => modal.remove());
+    const filesWrap = modal.querySelector("#quote-gate-files");
+    if (!files.length) {
+        filesWrap.innerHTML = `<div style="color:#94a3b8;font-size:13px;text-align:center;padding:14px;">파일 정보가 전달되지 않았습니다.</div>`;
+    } else {
+        files.forEach((f) => filesWrap.appendChild(buildQuotationFileCard(f)));
+    }
+
+    modal.querySelector("#btn-quote-cancel").addEventListener("click", () => modal.remove());
+
+    const proceed = modal.querySelector("#btn-quote-proceed");
     proceed.addEventListener("click", async () => {
         proceed.disabled = true;
         try {

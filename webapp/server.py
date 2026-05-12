@@ -224,6 +224,7 @@ class Stage2Runner:
         self.progress = {"step": 0, "total": 9, "label": ""}
         self.counter = {"current": 0, "limit": 50}
         self.pending_gate = None              # 현재 대기 중인 게이트 이름 (없으면 None)
+        self.pending_gate_payload = None      # 게이트와 함께 전달되는 페이로드 (재연결 복원용) 20260512
         self.gate_events = {}                 # name -> threading.Event
         self.run_id = None  # 재연결 시 done 중복 처리 방지용 고유 ID
 
@@ -266,6 +267,7 @@ class Stage2Runner:
             ev = self.gate_events.get(name)
             if self.pending_gate == name:
                 self.pending_gate = None
+                self.pending_gate_payload = None
             if self.status == "waiting_gate":
                 self.status = "running"
         if ev is not None:
@@ -294,12 +296,15 @@ class Stage2Runner:
                     self.counter = {"current": int(current), "limit": int(limit)}
                 self._emit("counter", current=int(current), limit=int(limit))
 
-            def gate_signal(name):
+            def gate_signal(name, payload=None):
+                # payload 20260512: 견적서 게이트 등에서 파일 정보를 UI 로 전달.
+                # 기본 None 이라 기존 호출(`gate_signal("...")`) 도 그대로 동작.
                 with self.lock:
                     self.gate_events[name] = threading.Event()
                     self.pending_gate = name
+                    self.pending_gate_payload = payload
                     self.status = "waiting_gate"
-                self._emit("gate", name=name)
+                self._emit("gate", name=name, payload=payload)
 
             def gate_wait(name):
                 with self.lock:
@@ -2314,6 +2319,7 @@ def stage2_status():
         "progress": runner2.progress,
         "counter": runner2.counter,
         "pending_gate": runner2.pending_gate,
+        "pending_gate_payload": runner2.pending_gate_payload,
         "stage1_checklist_done": STAGE1_COMPLETED_FILE.exists(),
     }
 
@@ -2350,6 +2356,7 @@ async def stage2_ws(ws: WebSocket):
                     "progress": runner2.progress,
                     "counter": runner2.counter,
                     "pending_gate": runner2.pending_gate,
+                    "pending_gate_payload": runner2.pending_gate_payload,
                 }
             new_since = since
             for msg in buffer:

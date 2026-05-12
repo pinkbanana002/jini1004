@@ -75,16 +75,23 @@ def launch_robot_chrome():
     chrome_exe = next((p for p in chrome_paths if os.path.exists(p)), None)
     if not chrome_exe: print("    ❌ 크롬 없음"); return
 
+    # Anti-detection 추가 20260510 (Plan A):
+    # 쿠팡(xauth.coupang.com) 봇 감지로 Access Denied 회귀 대응.
+    # --disable-blink-features=AutomationControlled : Chrome 자동화 모드 표시 제거
+    #   (navigator.webdriver=true 표면 노출 차단). subprocess.Popen 이 Chrome 을
+    #   직접 띄우므로 chromedriver 의 excludeSwitches 와 무관하게 launch 시점에
+    #   적용 가능. user-data-dir/chrome_profile 세션은 그대로 유지.
     cmd = [
         chrome_exe,
         "--remote-debugging-port=9222",
         f"--user-data-dir={path_prof}",
-        "--lang=ko", 
+        "--lang=ko",
         "--disable-features=Translate",
         "--no-first-run",
         "--no-default-browser-check",
-        "--start-maximized", 
+        "--start-maximized",
         "--window-position=0,0",
+        "--disable-blink-features=AutomationControlled",
         "https://supplier.coupang.com/login"
     ]
     subprocess.Popen(cmd)
@@ -112,6 +119,30 @@ for i in range(5):
         
         params = {'behavior': 'allow', 'downloadPath': my_dl_dir}
         driver.execute_cdp_cmd('Page.setDownloadBehavior', params)
+
+        # Anti-detection CDP 패치 20260510 (Plan A):
+        # subprocess 가 띄운 Chrome 은 launch 시점에는 정상이지만, attach 직후엔
+        # 이미 로그인 페이지가 로드돼 navigator.webdriver 검사가 끝났을 수 있음.
+        # Page.addScriptToEvaluateOnNewDocument 로 차후 모든 문서에 우선 주입하고,
+        # driver.refresh() 로 현재 페이지에도 강제 재적용. window.chrome / plugins /
+        # languages 도 같이 위장 (헤드리스/자동화 fingerprint 의 단골).
+        try:
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": (
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+                    "window.chrome = window.chrome || { runtime: {} };"
+                    "Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});"
+                    "Object.defineProperty(navigator, 'languages', {get: () => ['ko-KR','ko','en-US','en']});"
+                )
+            })
+            try:
+                driver.refresh()
+                time.sleep(2)
+            except Exception: pass
+            print("    🛡️ Anti-detection 패치 적용 + 새로고침 완료")
+        except Exception as _ad_e:
+            print(f"    ⚠️ Anti-detection 패치 실패 (무시 가능): {_ad_e}")
+
         print("✅ 연결 성공!")
         break
     except Exception as e:

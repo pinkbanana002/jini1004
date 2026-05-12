@@ -416,7 +416,48 @@ def run_stage2(config: dict, log, progress, should_stop, set_counter=None,
             # ---- 견적서 확인 게이트: Cell 9(07_cell_9.py) 완료 직후 UI 승인 대기 ----
             if filename.startswith("07_cell_9") and gate_signal and gate_wait:
                 print("\n⏸️ [견적서 확인 게이트] 엑셀 견적서 검수를 위해 대기합니다...")
-                gate_signal("quote_ready")
+                # 견적서 path 수집 20260512:
+                # 카테고리 추가등록 팝업과 동일한 UI 로 통일하기 위해, 각 상품의
+                # 견적서 파일 경로를 수집해 gate payload 로 함께 보낸다. Cell 9 본체는
+                # 원본 노트북 verbatim 규칙 때문에 못 건드리므로, Cell 9 의 ns 에 살아있는
+                # folder_list_df 를 외부에서 한 번 더 훑는다. 탐색 조건은 Cell 9
+                # (07_cell_9.py:112-118) 과 동일: "견적서" 포함 + .xlsx + ~$ 제외.
+                gate_payload = {"files": [], "count": 0}
+                try:
+                    folder_list_df = ns.get('folder_list_df')
+                    if folder_list_df is not None and len(folder_list_df) > 0:
+                        files = []
+                        for _, row in folder_list_df.iterrows():
+                            rep_img_path = str(row.get('대표이미지경로', '')).strip().rstrip("\\/")
+                            if not rep_img_path:
+                                continue
+                            rep_img_path = os.path.normpath(rep_img_path)
+                            prod_name = str(row.get('변환상품명', '')).strip()
+                            quotation_path = None
+                            quotation_filename = None
+                            folder_path = None
+                            for p in [rep_img_path, os.path.dirname(rep_img_path)]:
+                                if os.path.exists(p):
+                                    names = [
+                                        f for f in os.listdir(p)
+                                        if "견적서" in f and f.endswith(".xlsx") and "~$" not in f
+                                    ]
+                                    if names:
+                                        quotation_filename = names[0]
+                                        quotation_path = os.path.join(p, names[0])
+                                        folder_path = p
+                                        break
+                            if quotation_path:
+                                files.append({
+                                    "product_name": prod_name,
+                                    "folder_path": folder_path,
+                                    "excel_path": quotation_path,
+                                    "excel_filename": quotation_filename,
+                                })
+                        gate_payload = {"files": files, "count": len(files)}
+                except Exception as _qpe:
+                    print(f"⚠️ 견적서 path 수집 실패 (게이트는 그대로 진행): {_qpe}")
+                gate_signal("quote_ready", payload=gate_payload)
                 gate_wait("quote_ready")
                 print("▶️ 사용자 승인 감지 → 쿠팡 상품 등록(Cell 9-1)으로 진행합니다.")
 
