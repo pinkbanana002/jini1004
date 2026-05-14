@@ -9,7 +9,9 @@
 - [x] 3순위: 1단계 기능 (Cell 0 ~ Cell 6) — 실사용 테스트 성공
 - [x] 4순위: 2단계 기능 (Cell 6-1 ~ Cell 10) — **실 사용 E2E 검증 완료 (1건 등록 성공)**
 - [x] 4.5순위: UX 보강 (초기화 버튼 · 기본 진입 화면 · 체크리스트 중복 방지 · 2단계 락 해제)
-- [ ] 5순위 이후: (보류) 좌측 메뉴 순서 변경 / (경미) PowerShell 이모지 cp949 디코딩 / (경미) google.generativeai deprecation 마이그레이션
+- [x] 4.6순위 (2026-05-12): 2단계 견적서 팝업 통일 + 쿠팡 봇 감지 Plan A + 1단계 속도 개선
+- [x] 4.7순위 (2026-05-14): 1단계 옵션 그룹 분리 (색상 × 사이즈 카르테시안) + 시트 와이프 방지 3중 보호망
+- [ ] 5순위 이후: (보류) 좌측 메뉴 순서 변경 / (경미) PowerShell 이모지 cp949 디코딩 / (경미) google.generativeai deprecation 마이그레이션 / (정리) FORCE-DEBUG / DEBUG-PRICE / DEBUG-DIAG 진단 로그 누적
 
 ## 실 사용 검증 완료 (2026-04-19)
 
@@ -60,6 +62,11 @@ temp_downloads/                 # 크롬 기본 다운로드 폴더
 | ⑧ | `webapp/server.py` + `webapp/static/app.js` | `/api/reset` 엔드포인트 · `resetWorkspace()` · 부트 시 1단계 기본 진입 · `checklistDismissed` 플래그 | 체크리스트 팝업 중복 방지 + 새 상품 등록용 초기화 버튼 + 환영화면 스킵 |
 | ⑨ | `webapp/static/app.js` | `renderStage2` 툴바 + `updateStage2UI` + `resetWorkspace` 공통화 | 2단계 화면에도 동일한 🔄 새로 시작 버튼 추가, 1·2단계가 같은 초기화 핸들러 공유 |
 | ⑩ | `webapp/static/app.js` + `webapp/server.py` | `updateMenuLocks` · `renderStage2` · `/api/stage2/start` | 2단계 락 해제 — 1단계 체크리스트 없이도 바로 2단계 진입 가능 (설정·credentials만 갖춰지면) |
+| ⑪ | `webapp/server.py` + `webapp/modules/stage2.py` + `webapp/static/app.js` | `gate_signal` payload · `showQuoteGateModal` | 2단계 견적서 팝업을 카테고리 추가등록 팝업과 동일한 UI 로 통일 — 상품명/파일명/[폴더 열기]/[엑셀로 열기] 카드 + `pending_gate_payload` 재연결 복원 |
+| ⑫ | `webapp/modules/stage2_cells/06_cell_8.py` | `launch_robot_chrome` cmd 플래그 + attach 직후 CDP | 쿠팡 봇 감지 (Access Denied) Plan A — `--disable-blink-features=AutomationControlled` + `Page.addScriptToEvaluateOnNewDocument` 로 `navigator.webdriver` 등 위장 |
+| ⑬ | `webapp/modules/stage1.py` | Cell 4-1 sleep 5곳 (261/295 죽은코드/330·336 죽은코드/782/834) | 1단계 속도 개선 — sleep 랜덤화로 평균 단축 + 인간 패턴. `collect_opts_from_dropdown` 죽은 함수 정리 |
+| ⑭ | `webapp/modules/stage1.py` | Cell 5 `worksheet.clear()` 직전 + Cell 6 `backup_sheet.clear()` 직전 + `batch_update` 직전 | 시트 와이프 방지 3중 보호망 — 메인 탭 이름 검증 / 백업 탭 이름 검증 / batch_update range 형식 검증 |
+| ⑮ | `webapp/modules/stage1.py` | `get_all_options` 안 + 라인 805 받는 쪽 | **옵션 그룹 분리** (색상 × 사이즈 카르테시안 곱) — 박스 부모 클래스(`flex-wrap`/`flex-col`)로 그룹 메타 (`'group'` 필드) 부여, 받는 쪽에서 메타 기반 분리. 1차원 list + 단일 키 `'옵션'` 유지로 기존 호환 |
 
 ## 중요 규칙
 

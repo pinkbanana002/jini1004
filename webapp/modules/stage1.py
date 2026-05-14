@@ -258,7 +258,8 @@ def run_stage1(config: dict, log, progress, should_stop):
                         for img in d.find_elements(By.TAG_NAME, 'img')
                     )
                 )
-                time.sleep(0.3)
+                # 안정화 마진 랜덤화 20260512: 0.3 고정 → 0.15~0.25 랜덤
+                time.sleep(random.uniform(0.15, 0.25))
                 return True
             except Exception as e:
                 try:
@@ -280,63 +281,10 @@ def run_stage1(config: dict, log, progress, should_stop):
                     price_cny = parse_price_robust(lines[i + 1])
             return title, price_krw, price_cny
 
-        def collect_opts_from_dropdown(drv, dd_index):
-            try:
-                dropdowns = drv.find_elements(By.CSS_SELECTOR, ".option-dropdown")
-                if dd_index >= len(dropdowns):
-                    return None, []
-                dd = dropdowns[dd_index]
-                label_els = dd.find_elements(By.CSS_SELECTOR, "span.shrink-0")
-                if not label_els: return None, []
-                label = label_els[0].text.strip()
-                if not label: return None, []
-                btn = dd.find_element(By.CSS_SELECTOR, "button")
-                drv.execute_script("arguments[0].click();", btn)
-                time.sleep(0.5)
-                opt_list = []
-                prev_count = 0
-                scroll_area = None
-                try:
-                    scroll_area = drv.find_element(By.CSS_SELECTOR,
-                        "[class*='overflow-y-auto'], [class*='overflow-auto']")
-                except Exception: pass
-                for _ in range(20):
-                    opts = drv.find_elements(By.CSS_SELECTOR, "li.flex.w-full")
-                    visible = [o for o in opts if o.is_displayed()]
-                    for o in visible:
-                        try:
-                            lines = o.text.strip().split('\n')
-                            name = clean_text_for_system(lines[0]) if lines else ''
-                            price_cny_opt = 0.0
-                            if len(lines) > 1:
-                                m = re.search(r'¥([\d\.]+)', lines[1])
-                                if m: price_cny_opt = float(m.group(1))
-                            img_src = ''
-                            try:
-                                img_el = o.find_element(By.CSS_SELECTOR, "img")
-                                img_src = (img_el.get_attribute('src') or
-                                           img_el.get_attribute('data-src') or '')
-                            except Exception: pass
-                            if name and not any(x['name'] == name for x in opt_list):
-                                opt_list.append({'name': name, 'price': price_cny_opt, 'img': img_src})
-                        except Exception: pass
-                    if len(opt_list) == prev_count:
-                        break
-                    prev_count = len(opt_list)
-                    if scroll_area:
-                        drv.execute_script("arguments[0].scrollTop += 300;", scroll_area)
-                    elif visible:
-                        drv.execute_script("arguments[0].scrollIntoView();", visible[-1])
-                    time.sleep(0.2)
-                try:
-                    dds2 = drv.find_elements(By.CSS_SELECTOR, ".option-dropdown")
-                    btn2 = dds2[dd_index].find_element(By.CSS_SELECTOR, "button")
-                    drv.execute_script("arguments[0].click();", btn2)
-                except Exception: pass
-                time.sleep(0.2)
-                return label, opt_list
-            except Exception:
-                return None, []
+        # collect_opts_from_dropdown() 함수 정리 20260512:
+        # 셀로크홈즈 UI 변경 이후 get_all_options() 가 컨테이너 직접 스캔 방식으로
+        # 대체됐고, 이 함수는 어디서도 호출되지 않음. 죽은 코드라 통째 제거.
+        # (이 함수 안에 있던 time.sleep(0.5)/0.2/0.2 도 같이 사라짐)
 
         def get_all_options(drv):
             # 셀러라이프 UI 변경 대응 20260429 (5차) - 옵션 정공법:
@@ -347,6 +295,76 @@ def run_stage1(config: dict, log, progress, should_stop):
             # 옵션별 가격은 박스 텍스트의 '¥숫자' 를 정규식으로 추출 (20260502 추가).
             # 못 찾으면 0.0 으로 두고 외부의
             # 'if o["price"] == 0.0: o["price"] = price_cny' 보정으로 본문 가격 fallback.
+
+            # ============================================================
+            # 임시 진단 코드 20260514 (DOM 그룹 구조 파악용, 진단 끝나면 제거 예정)
+            # 색상 × 크기 같은 다중 옵션 그룹이 한 키로 합쳐지는 문제 — 그룹
+            # 컨테이너/헤더 셀렉터를 찾기 위해 박스의 부모 체인과 헤더 후보를 dump.
+            # 정식 분류 로직(아래)에는 영향 없음.
+            # ============================================================
+            try:
+                _diag_boxes = drv.find_elements(
+                    By.CSS_SELECTOR,
+                    "div.group.flex.cursor-default.items-start, div.group.flex.items-center"
+                )
+                print(f"\n🔬 [GROUP-DIAG] 옵션 박스 {len(_diag_boxes)}개 발견")
+
+                # 1) 첫 박스의 부모 체인 (위로 12단계) — 공통 부모 컨테이너 추적
+                if _diag_boxes:
+                    _chain = drv.execute_script("""
+                        var el = arguments[0], r = [];
+                        for (var i = 0; i < 12 && el; i++) {
+                            r.push({
+                                tag: el.tagName,
+                                cls: (el.className || '').toString().slice(0, 180),
+                                text: (el.innerText || '').slice(0, 100).replace(/\\n/g, ' | ')
+                            });
+                            el = el.parentElement;
+                        }
+                        return r;
+                    """, _diag_boxes[0])
+                    print("🔬 [GROUP-DIAG] 첫 박스의 부모 체인 (위로 12단계):")
+                    for _i, _n in enumerate(_chain):
+                        print(f"  [{_i:02d}] <{_n['tag']} class='{_n['cls']}'>")
+                        if _n['text']:
+                            print(f"        text: '{_n['text']}'")
+
+                # 2) 헤더 후보 텍스트("색상"/"크기"/"사이즈"/"규격"/"컬러") 가진 요소 위치
+                for _kw in ['색상', '크기', '사이즈', '규격', '컬러']:
+                    try:
+                        _els = drv.find_elements(By.XPATH, f"//*[contains(text(),'{_kw}')]")
+                        if _els:
+                            print(f"🔬 [GROUP-DIAG] '{_kw}' 텍스트 가진 요소: {len(_els)}개")
+                            for _el in _els[:3]:
+                                try:
+                                    _cls = (_el.get_attribute('class') or '')[:140]
+                                    print(f"    <{_el.tag_name} class='{_cls}'>")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+                # 3) 박스별 부모 1단계 클래스 — 같은 그룹끼리 같은 부모를 공유하는지 검사
+                if _diag_boxes:
+                    print("🔬 [GROUP-DIAG] 박스별 부모 1단계 (그룹별 묶음 단서):")
+                    for _bi, _b in enumerate(_diag_boxes):
+                        try:
+                            _pcls = drv.execute_script(
+                                "return arguments[0].parentElement ? "
+                                "arguments[0].parentElement.className : ''",
+                                _b
+                            )
+                            _name = (_b.text or '').strip()[:40].replace('\n', ' | ')
+                            print(f"  #{_bi+1:02d} 박스='{_name}' / 부모 class='{(_pcls or '')[:120]}'")
+                        except Exception:
+                            pass
+            except Exception as _gde:
+                try:
+                    print(f"🔬 [GROUP-DIAG] 진단 실패: {_gde}")
+                except Exception:
+                    pass
+            # ============== 임시 진단 코드 끝 ==============
+
             all_opts = {}
             try:
                 # 셀러라이프 UI 변경 대응 20260429 (5차-v2): 셀렉터 보강
@@ -462,7 +480,24 @@ def run_stage1(config: dict, log, progress, should_stop):
                         pass
                     if not name:
                         continue
-                    key = (name, img_src) if img_src else (name,)
+                    # 박스의 부모 1단계 클래스로 그룹 라벨 결정 20260514:
+                    # 'flex-wrap' 포함 → '색상', 'flex-col' 포함 → '사이즈', 둘 다 아님 → '옵션'.
+                    # 1차원 list 는 그대로 유지 (단일 키 '옵션'), 각 dict 에 'group' 필드만 추가.
+                    try:
+                        parent_cls = drv.execute_script(
+                            "return arguments[0].parentElement ? "
+                            "(arguments[0].parentElement.className || '').toString() : ''",
+                            el
+                        ) or ''
+                    except Exception:
+                        parent_cls = ''
+                    if 'flex-wrap' in parent_cls:
+                        group_label = '색상'
+                    elif 'flex-col' in parent_cls:
+                        group_label = '사이즈'
+                    else:
+                        group_label = '옵션'
+                    key = (group_label, name, img_src) if img_src else (group_label, name)
                     if key in seen:
                         continue
                     seen.add(key)
@@ -470,10 +505,15 @@ def run_stage1(config: dict, log, progress, should_stop):
                         'name': name,
                         'price': option_price,
                         'img': img_src,
+                        'group': group_label,
                     })
                 try:
-                    preview = [o['name'][:30] for o in unique_options[:5]]
-                    print(f"      🔍 [DEBUG] get_all_options 결과: {len(unique_options)}개 옵션 ({preview}...)")
+                    # 그룹 라벨 분포를 로그에 같이 표시
+                    from collections import Counter as _C
+                    _gcnt = _C(o.get('group', '옵션') for o in unique_options)
+                    _gpv = ", ".join(f"{k}:{v}" for k, v in _gcnt.items())
+                    preview = [o['name'][:20] for o in unique_options[:5]]
+                    print(f"      🔍 [DEBUG] get_all_options 결과: {len(unique_options)}개 ({_gpv}) {preview}...")
                 except Exception:
                     pass
                 if unique_options:
@@ -779,15 +819,24 @@ def run_stage1(config: dict, log, progress, should_stop):
                         break
                     last_h = new_h
                 driver.execute_script("window.scrollTo(0, 0);")
-                time.sleep(0.4)
+                # 페이지 상단 복귀 안정화 랜덤화 20260512: 0.4 고정 → 0.2~0.3 랜덤
+                time.sleep(random.uniform(0.2, 0.3))
 
                 main_imgs, thumb_imgs, detail_imgs = classify_images(driver)
                 options_dict = get_all_options(driver)
-                opt_keys = list(options_dict.keys())
-                opt1_key = opt_keys[0] if len(opt_keys) > 0 else '옵션1'
-                opt2_key = opt_keys[1] if len(opt_keys) > 1 else None
-                opt1_final = options_dict.get(opt1_key, [])
-                opt2_final = options_dict.get(opt2_key, []) if opt2_key else []
+                # 그룹 메타 분리 20260514: get_all_options 는 1차원 list 를 단일 키 '옵션'으로 반환.
+                # 각 옵션 dict 의 'group' 메타로 색상/사이즈/옵션 그룹 분리.
+                # 그룹 1개만 등장하면 자동으로 opt2_final 빈 list → 기존 동작 그대로.
+                flat_options = options_dict.get('옵션') or next(iter(options_dict.values()), [])
+                _groups = {}
+                for _o in flat_options:
+                    _g = _o.get('group', '옵션')
+                    _groups.setdefault(_g, []).append(_o)
+                _gkeys = list(_groups.keys())
+                opt1_key = _gkeys[0] if _gkeys else '옵션1'
+                opt2_key = _gkeys[1] if len(_gkeys) > 1 else None
+                opt1_final = _groups.get(opt1_key, [])
+                opt2_final = _groups.get(opt2_key, []) if opt2_key else []
                 for o in opt1_final + opt2_final:
                     if o['price'] == 0.0:
                         o['price'] = price_cny
@@ -830,8 +879,9 @@ def run_stage1(config: dict, log, progress, should_stop):
             except Exception as e:
                 print(f"❌ 오류 발생: {e}")
                 crawled_buffer.append({'type': 'error', 'data': original_row_dict})
-            # sellochomes throttling 회피 — 상품 간 2~4초 랜덤 대기
-            time.sleep(random.uniform(2.0, 4.0))
+            # 상품 간 대기 완화 20260512: 2.0~4.0 → 1.3~2.6 (평균 약 1초 단축)
+            # 셀로크홈즈는 봇 감지가 약해서 더 짧게도 안전. 랜덤 폭은 유지해 인간 패턴.
+            time.sleep(random.uniform(1.3, 2.6))
 
         print(f"\n🎉 [ Cell 4-1 ] 데이터 원천 수집 완료! 총 {len(crawled_buffer)}건 처리")
         if should_stop(): raise Stopped()
@@ -1013,12 +1063,23 @@ def run_stage1(config: dict, log, progress, should_stop):
             for col in standard_headers:
                 if col not in df_final.columns: df_final[col] = ""
             df_final = df_final[standard_headers]
-            print("    🧹 시트를 초기화하고 데이터를 올립니다...")
-            worksheet.clear()
-            set_with_dataframe(worksheet, df_final, include_column_header=True)
-            try: worksheet.format("1:1", {"textFormat": {"bold": True}})
-            except Exception: pass
-            print(f"🎉 [업로드 성공]")
+            # 보호 ① 20260514: 메인 시트 와이프 방지 안전망.
+            # worksheet 가 메인 탭(TARGET_SHEET_NAME) 가리키는지, df_final 이 비어있지 않은지
+            # 둘 다 확인하고 clear/업로드 진행. 둘 중 하나라도 어긋나면 통째 차단.
+            if worksheet.title != TARGET_SHEET_NAME:
+                raise RuntimeError(
+                    f"⚠️ worksheet 변수가 메인 탭이 아닙니다: '{worksheet.title}' "
+                    f"(예상: '{TARGET_SHEET_NAME}'). 시트 와이프 방지 차원에서 업로드 중단."
+                )
+            if df_final.empty:
+                print("⚠️ [보호 ①] df_final 비어있음 — clear/업로드 통째 스킵 (기존 시트 보존)")
+            else:
+                print(f"    🧹 시트('{worksheet.title}')를 초기화하고 {len(df_final)}행 데이터를 올립니다...")
+                worksheet.clear()
+                set_with_dataframe(worksheet, df_final, include_column_header=True)
+                try: worksheet.format("1:1", {"textFormat": {"bold": True}})
+                except Exception: pass
+                print(f"🎉 [업로드 성공]")
         else:
             print("⚠️ [경고] 업로드할 데이터가 없습니다.")
         if should_stop(): raise Stopped()
@@ -1048,15 +1109,66 @@ def run_stage1(config: dict, log, progress, should_stop):
 
         translator_ai = GoogleTranslator(source='auto', target='ko')
 
+        # \ubc88\uc5ed \ub2e8\uc704 \ubcf4\uc874 20260514:
+        # deep_translator(GoogleTranslator) \ubb34\ub8cc \ubc88\uc5ed\uae30\uac00 "\u9002\u540880-110\u78c5" \uac19\uc740
+        # \ud14d\uc2a4\ud2b8\ub97c "10\ub300\uc5d0 \uc801\ud569" \ucc98\ub7fc \ub2e8\uc704 \uc790\uccb4\ub97c \uc758\uc5ed\ud574\ubc84\ub9ac\ub294 \ubb38\uc81c \ud68c\ud53c\uc6a9.
+        # \uc6d0\ubcf8\uc5d0\uc11c \uc22b\uc790+\ub2e8\uc704 \ud1a0\ud070\uc744 \ubbf8\ub9ac \ucd94\ucd9c \u2192 \ubc88\uc5ed \ud6c4 \ud55c\uad6d\uc5b4 \ub2e8\uc704 \ud0a4\uc6cc\ub4dc\uac00
+        # \uc0b4\uc544\uc788\ub294\uc9c0 \uac80\uc0ac \u2192 \ub204\ub77d\ub41c \ud1a0\ud070\ub9cc \ud55c\uad6d\uc5b4\ub85c \uce58\ud658\ud574 \uacb0\uacfc \ub4a4\uc5d0 \ucca8\ubd80.
+        # \ud328\ud134: \uc815\uc218/\uc18c\uc218 + (\uc120\ud0dd) ~ \ub610\ub294 - \ubc94\uc704 + \ub2e8\uc704 \ud0a4\uc6cc\ub4dc.
+        _unit_pattern = re.compile(
+            r'\d+(?:\.\d+)?\s*[~\-]\s*\d+(?:\.\d+)?\s*(?:cm|mm|kg|lb|inch|\u82f1\u5bf8|\u5bf8|\u65a4|\u78c5)'
+            r'|\d+(?:\.\d+)?\s*(?:cm|mm|kg|lb|inch|\u82f1\u5bf8|\u5bf8|\u65a4|\u78c5)',
+            re.IGNORECASE
+        )
+        # \uc911\uad6d\uc5b4 \ub2e8\uc704 \u2192 \ud55c\uad6d\uc5b4 \ub2e8\uc704 \ub9e4\ud551. cm/mm/kg/lb/inch \ub294 \ud55c\uad6d\uc5b4 \ud14d\uc2a4\ud2b8\uc5d0\uc11c\ub3c4
+        # \uadf8\ub300\ub85c \uc4f0\uc774\ubbc0\ub85c \ub9e4\ud551 \ubd88\ud544\uc694(\ubc88\uc5ed\uae30\uac00 \uc0b4\ub824\ub450\uba74 \uadf8\ub300\ub85c \ud1b5\uacfc).
+        _unit_ko_map = {
+            '\u65a4': '\uadfc',
+            '\u78c5': '\ud30c\uc6b4\ub4dc',
+            '\u82f1\u5bf8': '\uc778\uce58',
+            '\u5bf8': '\uc778\uce58',
+        }
+
+        def _normalize_unit_token(token):
+            """\uc6d0\ubcf8 \ud1a0\ud070\uc758 \uc911\uad6d\uc5b4 \ub2e8\uc704 \ubd80\ubd84\uc744 \ud55c\uad6d\uc5b4\ub85c \uce58\ud658. \uc601\ubb38 \ub2e8\uc704\ub294 \uadf8\ub300\ub85c."""
+            for cn, ko in _unit_ko_map.items():
+                token = token.replace(cn, ko)
+            return token
+
         def translate_if_chinese(text):
-            if not text: return text
-            if re.search(r'[\u4e00-\u9fff]', str(text)):
-                try:
-                    time.sleep(0.2)
-                    return translator_ai.translate(text)
-                except Exception:
-                    return text
-            return text
+            if not text:
+                return text
+            if not re.search(r'[\u4e00-\u9fff]', str(text)):
+                return text
+            # 1) \uc6d0\ubcf8\uc5d0\uc11c \uc22b\uc790+\ub2e8\uc704 \ud1a0\ud070 \ucd94\ucd9c (\ud55c\uad6d\uc5b4 \ub2e8\uc704\ub85c \uce58\ud658\ud55c \ud615\ud0dc\ub85c \ubcf4\uad00)
+            raw_tokens = []
+            for m in _unit_pattern.finditer(str(text)):
+                token = m.group()
+                unit_m = re.search(r'(cm|mm|kg|lb|inch|\u82f1\u5bf8|\u5bf8|\u65a4|\u78c5)', token, re.IGNORECASE)
+                if unit_m:
+                    ko_token = _normalize_unit_token(token)
+                    ko_unit = _normalize_unit_token(unit_m.group())
+                    raw_tokens.append((ko_token, ko_unit))
+            # 2) \ubc88\uc5ed
+            try:
+                time.sleep(0.2)
+                translated = translator_ai.translate(text)
+            except Exception:
+                return text
+            if not translated:
+                return text
+            if not raw_tokens:
+                return translated
+            # 3) \ud55c\uad6d\uc5b4 \ub2e8\uc704 \ud0a4\uc6cc\ub4dc\uac00 \uacb0\uacfc\uc5d0 \uc0b4\uc544\uc788\ub294\uc9c0 \uac80\uc0ac (\ub300\uc18c\ubb38\uc790 \ubb34\uc2dc)
+            translated_lower = translated.lower()
+            missing = []
+            for ko_token, ko_unit in raw_tokens:
+                if ko_unit.lower() not in translated_lower:
+                    missing.append(ko_token)
+            # 4) \ub204\ub77d\ub41c \ud1a0\ud070\ub9cc \uacb0\uacfc \ub4a4\uc5d0 \uacf5\ubc31 \uad6c\ubd84\uc73c\ub85c \ucca8\ubd80
+            if missing:
+                return f"{translated} {' '.join(missing)}".strip()
+            return translated
 
         def analyze_seo_only(image_url, brand_name):
             if not model or not image_url: return None, None
@@ -1257,8 +1369,16 @@ def run_stage1(config: dict, log, progress, should_stop):
                         forbidden_char_list.append(f"📍 {row_num}행 변환상품명(기존값): {current_name}")
 
             if updates:
-                print("\n    ☁️ 구글 시트 업데이트 중 (번역 및 AI 적용)...")
-                worksheet.batch_update(updates)
+                # 보호 ③ 20260514: batch_update range 형식 검증.
+                # 'G2' 같은 단일 셀 range 만 허용. 빈 문자열 / 컬럼 통째 range / 잘못된 형식이
+                # 끼어 있으면 시트 통째 wipe 위험 — 통째 스킵.
+                bad = [u for u in updates if not re.match(r'^[A-Z]+\d+$', str(u.get('range', '')))]
+                if bad:
+                    print(f"⚠️ [보호 ③] batch_update 에 잘못된 range {len(bad)}개 발견 — "
+                          f"통째 스킵 (앞 3개: {bad[:3]})")
+                else:
+                    print("\n    ☁️ 구글 시트 업데이트 중 (번역 및 AI 적용)...")
+                    worksheet.batch_update(updates)
 
             # 스마트 백업
             print("-" * 30)
@@ -1266,17 +1386,23 @@ def run_stage1(config: dict, log, progress, should_stop):
             try:
                 try: backup_sheet = doc.worksheet(backup_sheet_name)
                 except Exception: backup_sheet = doc.add_worksheet(title=backup_sheet_name, rows=len(df)+50, cols=5)
-                backup_sheet.clear()
-                backup_data = [["이미지링크", "대표이미지경로", "COPY폴더 경로", "변환상품명", "임시파일명"]]
-                for idx, row in df.iterrows():
-                    img_link = str(row.iloc[idx_img_url]) if idx_img_url != -1 else ""
-                    h_path = str(row.iloc[idx_path]) if idx_path != -1 else ""
-                    i_copy = str(row.iloc[idx_copy_path]) if idx_copy_path != -1 else ""
-                    c_name = str(row.iloc[idx_trans_name]) if idx_trans_name != -1 else ""
-                    t_file = str(row.iloc[idx_temp_file]) if idx_temp_file != -1 else ""
-                    backup_data.append([img_link, h_path, i_copy, c_name, t_file])
-                backup_sheet.update(range_name="A1", values=backup_data)
-                print(f"📦 스마트 백업 완료 ('{backup_sheet_name}' 시트)")
+                # 보호 ② 20260514: backup_sheet 가 진짜 백업 탭인지 확인 후 진행.
+                # 어떤 이유로든 메인 탭(TARGET_SHEET_NAME) 을 가리키면 백업 단계 통째 스킵.
+                if backup_sheet.title != backup_sheet_name:
+                    print(f"⚠️ [보호 ②] backup_sheet 가 백업 탭 아님 "
+                          f"(실제: '{backup_sheet.title}', 예상: '{backup_sheet_name}') — 백업 단계 스킵")
+                else:
+                    backup_sheet.clear()
+                    backup_data = [["이미지링크", "대표이미지경로", "COPY폴더 경로", "변환상품명", "임시파일명"]]
+                    for idx, row in df.iterrows():
+                        img_link = str(row.iloc[idx_img_url]) if idx_img_url != -1 else ""
+                        h_path = str(row.iloc[idx_path]) if idx_path != -1 else ""
+                        i_copy = str(row.iloc[idx_copy_path]) if idx_copy_path != -1 else ""
+                        c_name = str(row.iloc[idx_trans_name]) if idx_trans_name != -1 else ""
+                        t_file = str(row.iloc[idx_temp_file]) if idx_temp_file != -1 else ""
+                        backup_data.append([img_link, h_path, i_copy, c_name, t_file])
+                    backup_sheet.update(range_name="A1", values=backup_data)
+                    print(f"📦 스마트 백업 완료 ('{backup_sheet_name}' 시트)")
             except Exception as e:
                 print(f"⚠️ 백업 중 경미한 오류: {e}")
 
