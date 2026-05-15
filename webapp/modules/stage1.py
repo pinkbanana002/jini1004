@@ -89,12 +89,79 @@ def run_stage1(config: dict, log, progress, should_stop):
         print("-" * 50)
         print(f"📂 작업 기준 폴더: {BASE_DRIVE}")
         print(f"🚀 [환경 설정 완료]")
+
+        # ============= 측정 로그 도구 (2026-05-15 추가) =============
+        # 각 Cell의 시작/끝 시각을 기록해서 마지막에 한 번에 출력.
+        # 로직 변경 없이 print 만 추가하는 진단 도구.
+        _cell_timings = {}
+        _stage_start_time = time.perf_counter()
+        def _t_start(name):
+            _cell_timings[name] = {'start': time.perf_counter()}
+        def _t_end(name):
+            if name in _cell_timings:
+                _cell_timings[name]['elapsed'] = time.perf_counter() - _cell_timings[name]['start']
+        def _t_report():
+            print("\n" + "=" * 50)
+            print("⏱️  1단계 구간별 소요 시간")
+            print("=" * 50)
+            for cell_name, data in _cell_timings.items():
+                elapsed = data.get('elapsed', 0)
+                bar_len = int(elapsed / 2)
+                bar = "█" * min(bar_len, 30)
+                print(f"  {cell_name:<28} {elapsed:>7.2f}초  {bar}")
+            total = time.perf_counter() - _stage_start_time
+            print("-" * 50)
+            print(f"  {'총 소요 시간':<28} {total:>7.2f}초  ({total/60:.1f}분)")
+            print("=" * 50)
+        # ===============================================================
+
+        # ============= 진단 로그 스위치 (2026-05-15 추가) =============
+        # 평소엔 False (빠름). 문제 생겨서 진단 필요할 때만 True로 바꿈.
+        # 영향: FORCE-DEBUG, CLASSIFY, GROUP-DIAG, DEBUG-DIAG, DEBUG-PRICE,
+        #       DEBUG-IMG, wait_for_page 내부 DEBUG 등 진단용 print만 토글.
+        # 메인 흐름 print (▶️/🎉/⚡/📌/💰/📸/✅) 는 항상 출력.
+        DIAG_LOG = False
+
+        # 진단 로그 필터: stdout 의 write 를 가로채서 진단 키워드 들어간 줄은 버림.
+        # (print 자체를 가리는 방식은 Python 스코프 규칙 때문에 안전하지 않아서 stdout 레벨에서 처리)
+        _DIAG_MARKERS = (
+            "FORCE-DEBUG", "CLASSIFY", "GROUP-DIAG",
+            "DEBUG-DIAG", "DEBUG-PRICE", "DEBUG-IMG",
+            "[DEBUG]",  # wait_for_page 내부 진단 5종 + body_text 미리보기 등
+        )
+        if not DIAG_LOG:
+            class _DiagFilter:
+                def __init__(self, target):
+                    self._target = target
+                    self._buf = ""
+                def write(self, s):
+                    if not s:
+                        return
+                    self._buf += s
+                    while "\n" in self._buf:
+                        line, _, self._buf = self._buf.partition("\n")
+                        # 진단 키워드 포함된 줄은 통째 스킵
+                        if any(m in line for m in _DIAG_MARKERS):
+                            continue
+                        self._target.write(line + "\n")
+                def flush(self):
+                    if self._buf:
+                        # 마지막 미완 줄도 필터 적용
+                        if not any(m in self._buf for m in _DIAG_MARKERS):
+                            self._target.write(self._buf)
+                        self._buf = ""
+                    if hasattr(self._target, 'flush'):
+                        self._target.flush()
+            sys.stdout = _DiagFilter(sys.stdout)
+        # ===============================================================
+
         if should_stop(): raise Stopped()
 
         # ==========================================================
         # [ Cell 1 ] 라이브러리 import (설치는 startup에서 처리됨)
         # ==========================================================
         progress(2, 7, "Cell 1: 라이브러리 로드")
+        _t_start("Cell 1: 라이브러리 로드")
         print("▶️ [ Cell 1 ] 필수 라이브러리를 로드합니다...")
 
         import subprocess
@@ -128,12 +195,14 @@ def run_stage1(config: dict, log, progress, should_stop):
         from deep_translator import GoogleTranslator
 
         print("🚀 [성공] 모든 도구(라이브러리)가 준비되었습니다.")
+        _t_end("Cell 1: 라이브러리 로드")
         if should_stop(): raise Stopped()
 
         # ==========================================================
         # [ Cell 2 ] 구글 시트 연결
         # ==========================================================
         progress(3, 7, "Cell 2: 구글 시트 연결")
+        _t_start("Cell 2: 구글 시트 연결")
         print("▶️ [ Cell 2 ] 구글 시트와 연결을 시도합니다...")
 
         if not os.path.exists(GOOGLE_JSON_FILE):
@@ -159,12 +228,14 @@ def run_stage1(config: dict, log, progress, should_stop):
             print("\n--- 📋 불러온 데이터 미리보기 (상위 3개) ---")
             print(df_original.head(3))
         print(f"🎉 구글 시트와 연결이 잘 되었습니다!")
+        _t_end("Cell 2: 구글 시트 연결")
         if should_stop(): raise Stopped()
 
         # ==========================================================
         # [ Cell 3 ] 브라우저 실행
         # ==========================================================
         progress(4, 7, "Cell 3: 크롬 브라우저 실행")
+        _t_start("Cell 3: 크롬 브라우저 실행")
         print("▶️ [ Cell 3 ] 크롬 브라우저를 설정하고 실행합니다...")
 
         options = webdriver.ChromeOptions()
@@ -192,12 +263,14 @@ def run_stage1(config: dict, log, progress, should_stop):
         print(f"▶️ 사이트로 이동합니다: {target_url}")
         driver.get(target_url)
         print(f"✅ 접속 성공! 현재 페이지: {driver.title}")
+        _t_end("Cell 3: 크롬 브라우저 실행")
         if should_stop(): raise Stopped()
 
         # ==========================================================
         # [ Cell 4-1 ] 1688 상세 크롤링 (직접 URL)
         # ==========================================================
         progress(5, 7, "Cell 4-1: 1688 상품 크롤링")
+        _t_start("Cell 4-1: 1688 상품 크롤링")
         print("\n▶️ [ Cell 4-1 ] 데이터 채굴 엔진 가동 🚀...")
 
         try:
@@ -297,72 +370,103 @@ def run_stage1(config: dict, log, progress, should_stop):
             # 'if o["price"] == 0.0: o["price"] = price_cny' 보정으로 본문 가격 fallback.
 
             # ============================================================
+            # 속도 개선 20260515 (implicit_wait 임시 OFF):
+            # Cell 3 에서 driver.implicitly_wait(10) 설정됨. 빈 옵션 박스 (#9~#16) 의
+            # find_elements / .text 호출 시 매번 10초 타임아웃까지 기다려서
+            # 상품당 약 160초 추가 소요. 옵션 박스 자체는 이미 DOM 에 다 렌더된
+            # 상태이므로 implicit wait 가 필요 없음. 이 함수 안에서만 임시로 0으로
+            # 낮추고 finally 에서 반드시 10으로 복원.
+            # 안전망: 옵션 인식 결과는 그대로 — '✅ 색상(N개) / 사이즈(N개) 원천 데이터
+            # 확보' 가 정상 출력되어야 함. 만약 0개로 떨어지면 백업으로 복원할 것.
+            # ============================================================
+            _orig_implicit = 10
+            try:
+                drv.implicitly_wait(0)
+            except Exception:
+                pass
+
+            try:
+                return _get_all_options_body(drv)
+            finally:
+                try:
+                    drv.implicitly_wait(_orig_implicit)
+                except Exception:
+                    pass
+
+        def _get_all_options_body(drv):
+
+            # ============================================================
             # 임시 진단 코드 20260514 (DOM 그룹 구조 파악용, 진단 끝나면 제거 예정)
             # 색상 × 크기 같은 다중 옵션 그룹이 한 키로 합쳐지는 문제 — 그룹
             # 컨테이너/헤더 셀렉터를 찾기 위해 박스의 부모 체인과 헤더 후보를 dump.
             # 정식 분류 로직(아래)에는 영향 없음.
+            # 속도 개선 20260515: 이 진단 블록이 1단계 시간의 80%(약 200초) 차지 확인.
+            # 빈 옵션 박스 (#9~#16) 의 부모체인/text 추출에 execute_script + XPath
+            # //*[contains(text(),'X')] 가 페이지 전체 스캔하느라 느림.
+            # 진단 끝났으므로 DIAG_LOG=True 일 때만 실행.
             # ============================================================
-            try:
-                _diag_boxes = drv.find_elements(
-                    By.CSS_SELECTOR,
-                    "div.group.flex.cursor-default.items-start, div.group.flex.items-center"
-                )
-                print(f"\n🔬 [GROUP-DIAG] 옵션 박스 {len(_diag_boxes)}개 발견")
+            if DIAG_LOG:
+                try:
+                    _diag_boxes = drv.find_elements(
+                        By.CSS_SELECTOR,
+                        "div.group.flex.cursor-default.items-start, div.group.flex.items-center"
+                    )
+                    print(f"\n🔬 [GROUP-DIAG] 옵션 박스 {len(_diag_boxes)}개 발견")
 
-                # 1) 첫 박스의 부모 체인 (위로 12단계) — 공통 부모 컨테이너 추적
-                if _diag_boxes:
-                    _chain = drv.execute_script("""
-                        var el = arguments[0], r = [];
-                        for (var i = 0; i < 12 && el; i++) {
-                            r.push({
-                                tag: el.tagName,
-                                cls: (el.className || '').toString().slice(0, 180),
-                                text: (el.innerText || '').slice(0, 100).replace(/\\n/g, ' | ')
-                            });
-                            el = el.parentElement;
-                        }
-                        return r;
-                    """, _diag_boxes[0])
-                    print("🔬 [GROUP-DIAG] 첫 박스의 부모 체인 (위로 12단계):")
-                    for _i, _n in enumerate(_chain):
-                        print(f"  [{_i:02d}] <{_n['tag']} class='{_n['cls']}'>")
-                        if _n['text']:
-                            print(f"        text: '{_n['text']}'")
+                    # 1) 첫 박스의 부모 체인 (위로 12단계) — 공통 부모 컨테이너 추적
+                    if _diag_boxes:
+                        _chain = drv.execute_script("""
+                            var el = arguments[0], r = [];
+                            for (var i = 0; i < 12 && el; i++) {
+                                r.push({
+                                    tag: el.tagName,
+                                    cls: (el.className || '').toString().slice(0, 180),
+                                    text: (el.innerText || '').slice(0, 100).replace(/\\n/g, ' | ')
+                                });
+                                el = el.parentElement;
+                            }
+                            return r;
+                        """, _diag_boxes[0])
+                        print("🔬 [GROUP-DIAG] 첫 박스의 부모 체인 (위로 12단계):")
+                        for _i, _n in enumerate(_chain):
+                            print(f"  [{_i:02d}] <{_n['tag']} class='{_n['cls']}'>")
+                            if _n['text']:
+                                print(f"        text: '{_n['text']}'")
 
-                # 2) 헤더 후보 텍스트("색상"/"크기"/"사이즈"/"규격"/"컬러") 가진 요소 위치
-                for _kw in ['색상', '크기', '사이즈', '규격', '컬러']:
-                    try:
-                        _els = drv.find_elements(By.XPATH, f"//*[contains(text(),'{_kw}')]")
-                        if _els:
-                            print(f"🔬 [GROUP-DIAG] '{_kw}' 텍스트 가진 요소: {len(_els)}개")
-                            for _el in _els[:3]:
-                                try:
-                                    _cls = (_el.get_attribute('class') or '')[:140]
-                                    print(f"    <{_el.tag_name} class='{_cls}'>")
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
-
-                # 3) 박스별 부모 1단계 클래스 — 같은 그룹끼리 같은 부모를 공유하는지 검사
-                if _diag_boxes:
-                    print("🔬 [GROUP-DIAG] 박스별 부모 1단계 (그룹별 묶음 단서):")
-                    for _bi, _b in enumerate(_diag_boxes):
+                    # 2) 헤더 후보 텍스트("색상"/"크기"/"사이즈"/"규격"/"컬러") 가진 요소 위치
+                    for _kw in ['색상', '크기', '사이즈', '규격', '컬러']:
                         try:
-                            _pcls = drv.execute_script(
-                                "return arguments[0].parentElement ? "
-                                "arguments[0].parentElement.className : ''",
-                                _b
-                            )
-                            _name = (_b.text or '').strip()[:40].replace('\n', ' | ')
-                            print(f"  #{_bi+1:02d} 박스='{_name}' / 부모 class='{(_pcls or '')[:120]}'")
+                            _els = drv.find_elements(By.XPATH, f"//*[contains(text(),'{_kw}')]")
+                            if _els:
+                                print(f"🔬 [GROUP-DIAG] '{_kw}' 텍스트 가진 요소: {len(_els)}개")
+                                for _el in _els[:3]:
+                                    try:
+                                        _cls = (_el.get_attribute('class') or '')[:140]
+                                        print(f"    <{_el.tag_name} class='{_cls}'>")
+                                    except Exception:
+                                        pass
                         except Exception:
                             pass
-            except Exception as _gde:
-                try:
-                    print(f"🔬 [GROUP-DIAG] 진단 실패: {_gde}")
-                except Exception:
-                    pass
+
+                    # 3) 박스별 부모 1단계 클래스 — 같은 그룹끼리 같은 부모를 공유하는지 검사
+                    if _diag_boxes:
+                        print("🔬 [GROUP-DIAG] 박스별 부모 1단계 (그룹별 묶음 단서):")
+                        for _bi, _b in enumerate(_diag_boxes):
+                            try:
+                                _pcls = drv.execute_script(
+                                    "return arguments[0].parentElement ? "
+                                    "arguments[0].parentElement.className : ''",
+                                    _b
+                                )
+                                _name = (_b.text or '').strip()[:40].replace('\n', ' | ')
+                                print(f"  #{_bi+1:02d} 박스='{_name}' / 부모 class='{(_pcls or '')[:120]}'")
+                            except Exception:
+                                pass
+                except Exception as _gde:
+                    try:
+                        print(f"🔬 [GROUP-DIAG] 진단 실패: {_gde}")
+                    except Exception:
+                        pass
             # ============== 임시 진단 코드 끝 ==============
 
             all_opts = {}
@@ -372,34 +476,36 @@ def run_stage1(config: dict, log, progress, should_stop):
                 # 공통 부모 클래스인 div.group.flex.items-center 사용.
                 # 이미지 없는 옵션(규격 모델)은 (name,) 만으로 중복 제거.
                 # 진단 디버그 20260430: F12 Console 매칭 vs Selenium 매칭 차이 원인 파악용
-                try:
-                    print(f"      🔍 [DEBUG-DIAG] page_source 길이: {len(drv.page_source)}자")
-                except Exception: pass
-                try:
-                    print(f"      🔍 [DEBUG-DIAG] '히비스커스' 포함 여부: {'히비스커스' in drv.page_source}")
-                except Exception: pass
-                try:
-                    print(f"      🔍 [DEBUG-DIAG] '규격 모델' 포함 여부: {'규격 모델' in drv.page_source}")
-                except Exception: pass
-                try:
-                    print(f"      🔍 [DEBUG-DIAG] iframe 개수: {len(drv.find_elements(By.TAG_NAME, 'iframe'))}")
-                except Exception: pass
-                try:
-                    selectors_to_test = [
-                        'div.group.flex.items-center',
-                        'div.group.cursor-pointer',
-                        'div.group.cursor-default',
-                        'div.group',
-                        'tr',
-                        'td',
-                    ]
-                    for sel in selectors_to_test:
-                        try:
-                            count = len(drv.find_elements(By.CSS_SELECTOR, sel))
-                            print(f"      🔍 [DEBUG-DIAG] {sel}: {count}개")
-                        except Exception:
-                            pass
-                except Exception: pass
+                # 속도 개선 20260515: DIAG_LOG=True 일 때만 진단 출력 (page_source 길이 측정이 무거움)
+                if DIAG_LOG:
+                    try:
+                        print(f"      🔍 [DEBUG-DIAG] page_source 길이: {len(drv.page_source)}자")
+                    except Exception: pass
+                    try:
+                        print(f"      🔍 [DEBUG-DIAG] '히비스커스' 포함 여부: {'히비스커스' in drv.page_source}")
+                    except Exception: pass
+                    try:
+                        print(f"      🔍 [DEBUG-DIAG] '규격 모델' 포함 여부: {'규격 모델' in drv.page_source}")
+                    except Exception: pass
+                    try:
+                        print(f"      🔍 [DEBUG-DIAG] iframe 개수: {len(drv.find_elements(By.TAG_NAME, 'iframe'))}")
+                    except Exception: pass
+                    try:
+                        selectors_to_test = [
+                            'div.group.flex.items-center',
+                            'div.group.cursor-pointer',
+                            'div.group.cursor-default',
+                            'div.group',
+                            'tr',
+                            'td',
+                        ]
+                        for sel in selectors_to_test:
+                            try:
+                                count = len(drv.find_elements(By.CSS_SELECTOR, sel))
+                                print(f"      🔍 [DEBUG-DIAG] {sel}: {count}개")
+                            except Exception:
+                                pass
+                    except Exception: pass
                 # 셀러라이프 UI 변경 대응 20260505:
                 # 신규 UI는 옵션 컨테이너가 'div.group.flex.cursor-default.items-start' 로 바뀜.
                 # 구 UI(items-center)도 함께 매칭하여 회귀 방지.
@@ -753,15 +859,32 @@ def run_stage1(config: dict, log, progress, should_stop):
                 crawled_buffer.append({'type': 'skip', 'data': original_row_dict})
                 continue
             print(f"\n⚡ [{index+2}] 수집 시작: {link_to_search[:50]}...")
+
+            # ===== 세부 측정 시작 (2026-05-15 추가) =====
+            _sub_t = {}
+            _sub_total_start = time.perf_counter()
+            # ============================================
+
             try:
                 item_id = extract_itid(link_to_search)
                 if not item_id:
                     raise ValueError(f"itId 추출 실패: {link_to_search}")
                 direct_url = f"https://sellochomes.co.kr/sourcinglife/alibaba/item?itId={item_id}"
+
+                # [1] 페이지 이동
+                _t1 = time.perf_counter()
                 driver.get(direct_url)
+                _sub_t['1.driver.get(페이지이동)'] = time.perf_counter() - _t1
+
+                # [2] 페이지 렌더 대기
+                _t2 = time.perf_counter()
                 rendered = wait_for_page(driver, timeout=10)
+                _sub_t['2.wait_for_page(렌더대기)'] = time.perf_counter() - _t2
                 if not rendered:
                     raise ValueError("페이지 렌더링 타임아웃")
+
+                # [3] body_text 추출 + 가격 파싱
+                _t3 = time.perf_counter()
                 # 셀러라이프 UI 변경 대응 20260429:
                 # body.innerText 는 '관련상품' 영역의 가격이 앞쪽에 위치하여
                 # parse_body_text 의 가격 마커가 오작동함.
@@ -808,22 +931,41 @@ def run_stage1(config: dict, log, progress, should_stop):
                 title, price_krw, price_cny = parse_body_text(body_text)
                 print(f"    📌 상품명: {title[:40]}")
                 print(f"    💰 가격: ₩{price_krw:,.0f} / ¥{price_cny}")
+                _sub_t['3.body_text+가격파싱'] = time.perf_counter() - _t3
 
+                # [4] 스크롤 루프 (lazy load)
+                _t4 = time.perf_counter()
                 # 레이지 로딩 대응: 상세 이미지가 DOM에 로드되도록 페이지 끝까지 스크롤
+                # 속도 개선 20260515: sleep 0.7→0.25~0.35 / 안전 위해 2회 연속 안정 시 종료 / 상한 15회
                 last_h = driver.execute_script("return document.body.scrollHeight")
-                for _ in range(12):
+                stable_count = 0
+                _scroll_iters = 0
+                for _ in range(15):
+                    _scroll_iters += 1
                     driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                    time.sleep(0.7)
+                    time.sleep(random.uniform(0.25, 0.35))
                     new_h = driver.execute_script("return document.body.scrollHeight")
                     if new_h == last_h:
-                        break
-                    last_h = new_h
+                        stable_count += 1
+                        if stable_count >= 2:
+                            break
+                    else:
+                        stable_count = 0
+                        last_h = new_h
                 driver.execute_script("window.scrollTo(0, 0);")
                 # 페이지 상단 복귀 안정화 랜덤화 20260512: 0.4 고정 → 0.2~0.3 랜덤
                 time.sleep(random.uniform(0.2, 0.3))
+                _sub_t[f'4.스크롤루프({_scroll_iters}회)'] = time.perf_counter() - _t4
 
+                # [5] classify_images (이미지 분류)
+                _t5 = time.perf_counter()
                 main_imgs, thumb_imgs, detail_imgs = classify_images(driver)
+                _sub_t['5.classify_images(이미지분류)'] = time.perf_counter() - _t5
+
+                # [6] get_all_options (옵션 박스 추출)
+                _t6 = time.perf_counter()
                 options_dict = get_all_options(driver)
+                _sub_t['6.get_all_options(옵션추출)'] = time.perf_counter() - _t6
                 # 그룹 메타 분리 20260514: get_all_options 는 1차원 list 를 단일 키 '옵션'으로 반환.
                 # 각 옵션 dict 의 'group' 메타로 색상/사이즈/옵션 그룹 분리.
                 # 그룹 1개만 등장하면 자동으로 opt2_final 빈 list → 기존 동작 그대로.
@@ -879,17 +1021,38 @@ def run_stage1(config: dict, log, progress, should_stop):
             except Exception as e:
                 print(f"❌ 오류 발생: {e}")
                 crawled_buffer.append({'type': 'error', 'data': original_row_dict})
+
+            # ===== 상품별 세부 측정 결과 출력 (2026-05-15 추가) =====
+            try:
+                _sub_total = time.perf_counter() - _sub_total_start
+                print(f"\n  ⏱️ [상품 #{index+2} 세부 측정] 총 {_sub_total:.2f}초")
+                for _stg_name, _stg_elapsed in _sub_t.items():
+                    _bar_len = int(_stg_elapsed * 2)
+                    _bar = "▓" * min(_bar_len, 30)
+                    _pct = (_stg_elapsed / _sub_total * 100) if _sub_total > 0 else 0
+                    print(f"     {_stg_name:<30} {_stg_elapsed:>6.2f}초  ({_pct:>4.1f}%)  {_bar}")
+            except Exception:
+                pass
+            # =====================================================
+
             # 상품 간 대기 완화 20260512: 2.0~4.0 → 1.3~2.6 (평균 약 1초 단축)
             # 셀로크홈즈는 봇 감지가 약해서 더 짧게도 안전. 랜덤 폭은 유지해 인간 패턴.
+            _t7 = time.perf_counter()
             time.sleep(random.uniform(1.3, 2.6))
+            try:
+                print(f"     {'7.상품간 대기 sleep':<30} {time.perf_counter()-_t7:>6.2f}초")
+            except Exception:
+                pass
 
         print(f"\n🎉 [ Cell 4-1 ] 데이터 원천 수집 완료! 총 {len(crawled_buffer)}건 처리")
+        _t_end("Cell 4-1: 1688 상품 크롤링")
         if should_stop(): raise Stopped()
 
         # ==========================================================
         # [ Cell 4-2 ] 데이터 가공 + 원가 + 이미지 다운로드
         # ==========================================================
         progress(6, 7, "Cell 4-2: 데이터 가공 + 이미지 다운로드")
+        _t_start("Cell 4-2: 데이터 가공 + 다운로드")
         print("\n▶️ [ Cell 4-2 ] 데이터 가공 및 이미지 다운로드 시작...")
 
         from urllib.parse import urlparse
@@ -1040,12 +1203,14 @@ def run_stage1(config: dict, log, progress, should_stop):
                 row['전체옵션명'] = f'=TRIM(G{i} & " " & L{i})'
             results_list = final_sheet_rows
             print(f"\n🎉 [ Cell 4-2 ] 처리 완료! (세트 원가 반영됨)")
+        _t_end("Cell 4-2: 데이터 가공 + 다운로드")
         if should_stop(): raise Stopped()
 
         # ==========================================================
         # [ Cell 5 ] 구글시트 업로드
         # ==========================================================
         progress(7, 7, "Cell 5: 구글시트 업로드")
+        _t_start("Cell 5: 구글시트 업로드")
         print(f"\n▶️ [ Cell 5 ] 최종 데이터를 구글 시트에 업로드합니다...")
         if results_list:
             worksheet = doc.worksheet(TARGET_SHEET_NAME)
@@ -1082,12 +1247,14 @@ def run_stage1(config: dict, log, progress, should_stop):
                 print(f"🎉 [업로드 성공]")
         else:
             print("⚠️ [경고] 업로드할 데이터가 없습니다.")
+        _t_end("Cell 5: 구글시트 업로드")
         if should_stop(): raise Stopped()
 
         # ==========================================================
         # [ Cell 6 ] AI 분석 + 중국어 옵션 번역 + 백업
         # ==========================================================
         progress(7, 7, "Cell 6: AI 분석 + 번역")
+        _t_start("Cell 6: AI 분석 + 번역")
         print("\n▶️ [ Cell 6 ] AI 분석 및 중국어 옵션 번역을 시작합니다...")
 
         if not GEMINI_API_KEY:
@@ -1421,7 +1588,14 @@ def run_stage1(config: dict, log, progress, should_stop):
         except Exception as e:
             print(f"❌ Cell 6 실행 중 오류: {e}")
 
+        _t_end("Cell 6: AI 분석 + 번역")
         print("\n🎉 [1단계 전체 완료] 구글시트를 검수 후 체크리스트 3개를 확인하세요.")
+
+        # 측정 결과 출력 (2026-05-15 추가)
+        try:
+            _t_report()
+        except Exception:
+            pass
 
     finally:
         sys.stdout = original_stdout
