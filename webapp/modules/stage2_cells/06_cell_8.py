@@ -228,11 +228,18 @@ for idx, row in df.iterrows():
             check_browser_error(driver)
 
         # 다운로드 모달 열기
+        # 한국어/영어 UI 모두 대응 20260515:
+        # 쿠팡 서플라이허브 UI가 한국어로 변경됨 ('최신 견적서 파일 다운로드').
+        # 예전 영어 버튼('Download latest excel file')도 회귀 방지로 같이 유지.
         try:
-            dl_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Download latest excel file')]")))
+            dl_btn = wait.until(EC.element_to_be_clickable((By.XPATH,
+                "//button[contains(., 'Download latest excel file') or contains(., '최신 견적서 파일 다운로드') or contains(., '견적서 파일 다운로드')]"
+            )))
             driver.execute_script("arguments[0].click();", dl_btn)
             time.sleep(1.5)
-        except:
+        except Exception as _e_dl:
+            # 진단 로그 추가 20260515: 조용한 패스 → 어디서 실패했는지 보이게.
+            print(f"    ❌ '최신 견적서 파일 다운로드' 버튼을 찾지 못했습니다: {type(_e_dl).__name__}")
             check_browser_error(driver)
             driver.refresh(); time.sleep(3); continue
 
@@ -276,12 +283,18 @@ for idx, row in df.iterrows():
             continue
         
         # 다운로드 버튼 클릭
+        # 한국어/영어 UI 모두 대응 20260515:
+        # Search → '검색', Download → '다운로드' 한국어 라벨도 같이 매칭.
         try:
-            search_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Search')]")))
+            search_btn = wait.until(EC.element_to_be_clickable((By.XPATH,
+                "//button[contains(., 'Search') or contains(., '검색')]"
+            )))
             driver.execute_script("arguments[0].click();", search_btn)
             time.sleep(3)
             
-            dn_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[@class='modal-footer']//button[contains(., 'Download')]")))
+            dn_btn = wait.until(EC.element_to_be_clickable((By.XPATH,
+                "//div[@class='modal-footer']//button[contains(., 'Download') or contains(., '다운로드')]"
+            )))
             driver.execute_script("arguments[0].click();", dn_btn)
             print("    ⬇️ 다운로드 요청")
             time.sleep(5) 

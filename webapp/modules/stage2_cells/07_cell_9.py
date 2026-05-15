@@ -56,7 +56,7 @@ FIXED_VALUES = {
     "FIXED_BRAND": MY_BRAND_NAME if 'MY_BRAND_NAME' in globals() else "상세페이지 참조",
     "FIXED_MANUFACTURER": MY_COMPANY_NAME if 'MY_COMPANY_NAME' in globals() else "상세페이지 참조",
     "FIXED_PHONE": MY_PHONE_NUMBER if 'MY_PHONE_NUMBER' in globals() else "010-0000-0000",
-    "FIXED_SIZE_CHART": "사이즈표.jpg",
+    "FIXED_SIZE_CHART": "사이즈차트.jpg",
     "FIXED_TAX": "과세",
     "FIXED_DEAL_TYPE": "기타 도소매업자",
     "FIXED_IMPORT": "수입상품",

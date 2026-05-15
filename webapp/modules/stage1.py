@@ -572,10 +572,15 @@ def run_stage1(config: dict, log, progress, should_stop):
                             name = tmp
                     # 셀러라이프 UI 변경 대응 20260505 (필터 완화):
                     # img alt에서 직접 가져오므로 글자 수 제한을 1자+로 완화.
-                    # 숫자로 시작하는 토큰은 여전히 제외.
+                    # 사이즈 옵션 누락 수정 20260515:
+                    # 기존 starts_with_digit 필터가 "2XL【67.5-75kg에 적합】",
+                    # "3XL【75-82.5kg에 적합】" 같은 정상 사이즈 옵션을
+                    # 첫 글자가 '2'/'3'이라는 이유로 거르고 있었음.
+                    # → 가격박스("¥10.3", "10") 같은 순수 숫자/통화만 거르는
+                    # is_pure_number 필터로 교체.
                     text_chars_kr_cn = re.findall(r'[가-힣一-鿿]', name)
-                    starts_with_digit = bool(name) and name[0].isdigit()
-                    if len(text_chars_kr_cn) < 1 or starts_with_digit:
+                    is_pure_number = bool(name) and re.fullmatch(r'[\d.,\s¥₩원]+', name) is not None
+                    if len(text_chars_kr_cn) < 1 or is_pure_number:
                         continue
                     img_src = ''
                     try:
