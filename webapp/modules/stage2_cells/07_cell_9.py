@@ -197,6 +197,14 @@ for idx, row in folder_list_df.iterrows():
                 # 값 결정
                 if "전화번호" in clean_h or "소비자상담" in clean_h: val = FIXED_VALUES["FIXED_PHONE"]
                 
+                # 사이즈차트 우선 매칭 20260516:
+                # 헤더가 "사이즈차트 이미지 파일명" 인 경우, MAPPING_CONFIG 의 정렬
+                # 순서상 "사이즈"(길이3) 가 "차트"(길이2) 보다 먼저 매칭되어
+                # FIXED_SIZE_CHART 로 가지 않고 빈 값으로 빠지는 문제.
+                # → 헤더에 "사이즈차트" 가 통째로 들어있으면 무조건 먼저 채운다.
+                elif "사이즈차트" in clean_h: 
+                    val = FIXED_VALUES["FIXED_SIZE_CHART"]
+                
                 # ‼️ [요청하신 부분 - 쉼표로 합치기 적용] ‼️
                 elif "추가이미지" in clean_h:
                     # 한 칸에 쉼표로 연결해서 2장을 모두 넣습니다.

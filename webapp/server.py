@@ -1027,14 +1027,45 @@ class CategoryRunner:
         self._cleanup_singleton(path_prof)
 
         def _connect_fresh():
-            _sub.Popen([chrome_exe, "--remote-debugging-port=9222",
-                        f"--user-data-dir={path_prof}", "--lang=ko"])
+            # Anti-detection 추가 20260517:
+            # 카테고리 추가 등록에서 쿠팡 봇 감지로 chromedriver 통신이 끊겨
+            # 'chromedriver!GetHandleVerifier' 시스템 에러가 발생하던 문제.
+            # 06_cell_8.py 의 anti-detection 옵션/패치와 동일하게 적용.
+            _sub.Popen([
+                chrome_exe,
+                "--remote-debugging-port=9222",
+                f"--user-data-dir={path_prof}",
+                "--lang=ko",
+                "--disable-features=Translate",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--start-maximized",
+                "--window-position=0,0",
+                "--disable-blink-features=AutomationControlled",
+            ])
             _time.sleep(3)
             options = webdriver.ChromeOptions()
             options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
             drv = webdriver.Chrome(
                 service=Service(ChromeDriverManager().install()), options=options
             )
+            # navigator.webdriver / window.chrome / plugins / languages 위장
+            try:
+                drv.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                    "source": (
+                        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+                        "window.chrome = window.chrome || { runtime: {} };"
+                        "Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});"
+                        "Object.defineProperty(navigator, 'languages', {get: () => ['ko-KR','ko','en-US','en']});"
+                    )
+                })
+                try:
+                    drv.refresh()
+                    _time.sleep(2)
+                except Exception:
+                    pass
+            except Exception as _ad_e:
+                self._log(f"⚠️ Anti-detection 패치 실패 (무시 가능): {_ad_e}", "warn")
             w = WebDriverWait(drv, 20)
             return drv, w
 
@@ -1091,9 +1122,14 @@ class CategoryRunner:
                 _time.sleep(2)
 
             # 모달 열기
+            # 한국어/영어 UI 모두 대응 20260517:
+            # 쿠팡 서플라이허브 UI가 한국어로 변경됨 ('최신 견적서 파일 다운로드').
+            # 카테고리 추가 등록 검색 시 chromedriver 에러로 실패하던 문제.
+            # 06_cell_8.py 와 동일하게 한국어/영어 양쪽 매칭으로 해결.
             try:
                 dl_btn = wait.until(EC.element_to_be_clickable(
-                    (By.XPATH, "//button[contains(., 'Download latest excel file')]")
+                    (By.XPATH,
+                     "//button[contains(., 'Download latest excel file') or contains(., '최신 견적서 파일 다운로드') or contains(., '견적서 파일 다운로드')]")
                 ))
                 driver.execute_script("arguments[0].click();", dl_btn)
                 _time.sleep(1.5)
@@ -1397,33 +1433,147 @@ class CategoryRunner:
                 pass
 
             try:
-                self._log("  👉 [3/4] 법적 서류 N/A 체크...")
+                self._log("  🔥🔥🔥 [3/4] 한번 더 테스트! N/A 체크...")
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 _time.sleep(0.8)
                 driver.execute_script("window.scrollTo(0, 0);")
                 _time.sleep(0.3)
-                all_na = driver.find_elements(
-                    By.XPATH,
-                    "//label[contains(., 'N/A') or contains(., 'n/a')]",
-                )
-                self._log(f"  📋 N/A 라벨 {len(all_na)}개 발견")
-                clicked = 0
-                for na in all_na:
-                    try:
-                        driver.execute_script(
-                            "arguments[0].scrollIntoView({block:'center'});", na
-                        )
-                        _time.sleep(0.2)
-                        driver.execute_script("arguments[0].click();", na)
-                        clicked += 1
-                        _time.sleep(0.3)
-                    except Exception:
-                        pass
-                self._log(f"  ✅ N/A {clicked}/{len(all_na)}개 클릭 완료")
+                # 한국어 UI 대응 + 검색 범위 확대 20260526:
+                # 쿠팡 서플라이허브 UI가 한국어로 변경되면서 'N/A' 라벨이
+                # '해당없음' 으로 표시되며, 일부는 <label> 이 아닌 <span> 등
+                # 다른 태그에 텍스트가 들어있음. 또한 라디오 버튼 옆에
+                # 단순 텍스트로 '해당없음'이 표시되는 경우도 있어서,
+                # JavaScript로 페이지 전체를 훑어 가장 안정적으로 클릭한다.
+                clicked_count = driver.execute_script("""
+                    var targets = ['해당없음', '해당 없음', 'N/A', 'n/a'];
+                    var clicked = 0;
+                    var tried = 0;
+
+                    // 1단계: <label>에서 직접 매칭
+                    var labels = document.querySelectorAll('label');
+                    labels.forEach(function(lb) {
+                        var t = (lb.textContent || '').trim();
+                        if (targets.indexOf(t) !== -1) {
+                            tried++;
+                            try {
+                                lb.scrollIntoView({block:'center'});
+                                lb.click();
+                                clicked++;
+                            } catch(e) {}
+                        }
+                    });
+
+                    // 2단계: 범위 확대 - 모든 요소의 텍스트 노드에서 검색
+                    // '해당없음'이 <span>, <div> 등 임의 태그에 있을 때
+                    if (clicked === 0) {
+                        var walker = document.createTreeWalker(
+                            document.body,
+                            NodeFilter.SHOW_TEXT,
+                            null,
+                            false
+                        );
+                        var nodes = [];
+                        var node;
+                        while (node = walker.nextNode()) {
+                            var txt = (node.nodeValue || '').trim();
+                            if (targets.indexOf(txt) !== -1) {
+                                nodes.push(node);
+                            }
+                        }
+                        nodes.forEach(function(n) {
+                            tried++;
+                            // 텍스트가 들어있는 가장 가까운 클릭 가능 요소를 찾는다
+                            var parent = n.parentElement;
+                            var target = null;
+                            var hops = 0;
+                            while (parent && hops < 5) {
+                                // 형제 중 라디오 input 찾기
+                                var radio = parent.querySelector('input[type="radio"]');
+                                if (radio) { target = radio; break; }
+                                // 부모가 label이면 그것 클릭
+                                if (parent.tagName === 'LABEL') { target = parent; break; }
+                                parent = parent.parentElement;
+                                hops++;
+                            }
+                            // 못 찾으면 텍스트 노드의 부모를 직접 클릭
+                            if (!target) target = n.parentElement;
+                            if (target) {
+                                try {
+                                    target.scrollIntoView({block:'center'});
+                                    target.click();
+                                    clicked++;
+                                } catch(e) {}
+                            }
+                        });
+                    }
+                    return [clicked, tried];
+                """)
+                if isinstance(clicked_count, list) and len(clicked_count) == 2:
+                    self._log(
+                        f"  ✅ N/A/해당없음 {clicked_count[0]}/{clicked_count[1]}개 클릭 완료"
+                    )
+                else:
+                    self._log(f"  ✅ N/A/해당없음 처리 완료: {clicked_count}")
+                _time.sleep(0.8)
                 driver.execute_script("window.scrollTo(0, 0);")
                 _time.sleep(0.5)
             except Exception as e:
                 self._log(f"  ⚠️ N/A 처리 오류: {e}", "warn")
+
+            # ── [3.5/4] 이행확약서 자동생성 동의 → '아니오' 처리 ──
+            # [1/4]에서 모든 'Yes/예'가 일괄 클릭되었기 때문에
+            # 이행확약서 동의 질문도 '예'로 선택된 상태. 이를 '아니오'로 덮어쓴다.
+            try:
+                self._log("  👉 [3.5/4] 이행확약서 자동생성 '아니오' 처리...")
+                fixed = driver.execute_script("""
+                    var keywords = ['이행확약서', '소명 및 이행', '확약서 자동 생성',
+                                    '확약서 자동생성', '동일 상품 소명'];
+                    var fixed = 0;
+                    // 키워드를 포함하는 요소를 찾는다
+                    var all = document.querySelectorAll('*');
+                    var matches = [];
+                    for (var i = 0; i < all.length; i++) {
+                        var el = all[i];
+                        var t = (el.textContent || '');
+                        for (var k = 0; k < keywords.length; k++) {
+                            if (t.indexOf(keywords[k]) !== -1) {
+                                // 가장 작은 단위(자손이 없는 텍스트 컨테이너)만 사용
+                                if (el.children.length < 5) {
+                                    matches.push(el);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // 매칭된 요소 근처에서 '아니오' / 'No' 라벨을 찾아 클릭
+                    matches.forEach(function(m) {
+                        // 형제, 같은 컨테이너 내 라벨 검색
+                        var container = m;
+                        for (var h = 0; h < 6 && container; h++) {
+                            var labels = container.querySelectorAll('label');
+                            for (var j = 0; j < labels.length; j++) {
+                                var lt = (labels[j].textContent || '').trim();
+                                if (lt === '아니오' || lt === '아니요' || lt === 'No') {
+                                    try {
+                                        labels[j].scrollIntoView({block:'center'});
+                                        labels[j].click();
+                                        fixed++;
+                                        return;
+                                    } catch(e) {}
+                                }
+                            }
+                            container = container.parentElement;
+                        }
+                    });
+                    return fixed;
+                """)
+                if fixed and fixed > 0:
+                    self._log(f"  ✅ 이행확약서 '아니오' {fixed}건 처리", "success")
+                else:
+                    self._log("  ℹ️ 이행확약서 항목 없음 또는 이미 '아니오'")
+                _time.sleep(0.5)
+            except Exception as e:
+                self._log(f"  ⚠️ 이행확약서 처리 오류: {e}", "warn")
 
             try:
                 self._log("  👉 [4/4] 로켓 설치 'No' 정밀 타격...")
@@ -1485,19 +1635,71 @@ class CategoryRunner:
 
             # ── Step 3: Validate & 결과 팝업 ──
             try:
-                validate_btn = wait.until(
-                    EC.presence_of_element_located(
-                        (By.XPATH, "//button[contains(., 'Validate')]")
-                    )
-                )
-                driver.execute_script("arguments[0].click();", validate_btn)
-                self._log("  👉 [Validate] 버튼 클릭 완료")
+                # 한국어 UI 대응: Validate / 검증 / 등록 / 제출 / 저장 모두 시도
+                validate_btn = None
+                validate_xpaths = [
+                    "//button[contains(., 'Validate')]",
+                    "//button[contains(., '검증')]",
+                    "//button[contains(., '등록')]",
+                    "//button[contains(., '제출')]",
+                    "//button[normalize-space()='저장']",
+                    "//button[contains(@class,'validate')]",
+                    "//button[@type='submit']",
+                ]
+                for vx in validate_xpaths:
+                    try:
+                        validate_btn = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, vx))
+                        )
+                        if validate_btn:
+                            self._log(f"  🔍 등록 버튼 발견 (XPath: {vx})")
+                            break
+                    except Exception:
+                        continue
+
+                if not validate_btn:
+                    # 최후의 수단: 화면에 보이는 모든 버튼을 JavaScript로 검색
+                    self._log("  ⚠️ 표준 XPath로 버튼 미발견. JavaScript 광역 검색 시도...")
+                    found = driver.execute_script("""
+                        var keywords = ['Validate', '검증', '등록', '제출', '저장', 'Submit', 'Save'];
+                        var btns = document.querySelectorAll('button, input[type="submit"], input[type="button"]');
+                        for (var i = 0; i < btns.length; i++) {
+                            var b = btns[i];
+                            if (!b.offsetParent) continue;  // 보이지 않으면 스킵
+                            if (b.disabled) continue;
+                            var t = (b.textContent || b.value || '').trim();
+                            for (var k = 0; k < keywords.length; k++) {
+                                if (t === keywords[k] || t.indexOf(keywords[k]) !== -1) {
+                                    b.scrollIntoView({block:'center'});
+                                    b.click();
+                                    return t || true;
+                                }
+                            }
+                        }
+                        return false;
+                    """)
+                    if found:
+                        self._log(f"  👉 [등록/Validate] 버튼 클릭 완료 (JS 광역 검색: '{found}')")
+                    else:
+                        self._log("  ❌ 등록/Validate 버튼을 찾을 수 없습니다.", "error")
+                        return False
+                else:
+                    driver.execute_script("arguments[0].click();", validate_btn)
+                    self._log("  👉 [등록/Validate] 버튼 클릭 완료")
 
                 self._log("⏳ [스마트 대기] 결과 팝업을 기다리는 중... (최대 180초)")
                 try:
+                    # 한국어 UI 대응: 영문/한글 메시지 모두 감지
                     WebDriverWait(driver, 180).until(
                         EC.visibility_of_element_located(
-                            (By.XPATH, "//*[contains(text(), 'Quotation has been submitted')]")
+                            (By.XPATH,
+                             "//*[contains(text(), 'Quotation has been submitted')"
+                             " or contains(text(), '견적서가 제출')"
+                             " or contains(text(), '견적이 제출')"
+                             " or contains(text(), '제출되었습니다')"
+                             " or contains(text(), '등록되었습니다')"
+                             " or contains(text(), '등록이 완료')"
+                             " or contains(text(), '저장되었습니다')]")
                         )
                     )
                     self._log("🚀 결과 팝업 감지 완료!", "success")
@@ -1508,7 +1710,9 @@ class CategoryRunner:
                 try:
                     close_btn = driver.find_element(
                         By.XPATH,
-                        "//button[contains(., '닫기') or contains(., '확인') or contains(., 'Close')]",
+                        "//button[contains(., '닫기') or contains(., '확인') "
+                        "or contains(., 'Close') or contains(., 'OK') "
+                        "or contains(., '완료')]",
                     )
                     driver.execute_script("arguments[0].click();", close_btn)
                     self._log("  👉 결과 팝업 '닫기' 클릭 완료", "success")
@@ -1518,7 +1722,7 @@ class CategoryRunner:
                     self._log("  ⚠️ 결과 팝업 '닫기' 버튼 미발견", "warn")
                     return False
             except Exception as e:
-                self._log(f"  ❌ 등록 버튼 처리 오류: {e}", "error")
+                self._log(f"  ❌ 등록 버튼 처리 오류: {type(e).__name__}: {e}", "error")
                 return False
 
         except Exception as e:
@@ -1650,9 +1854,11 @@ class CategoryRunner:
                     time.sleep(2)
 
                 # Download 버튼 클릭
+                # 한국어/영어 UI 모두 대응 20260517 (search_candidates 와 동일 처리).
                 try:
                     dl_btn = wait.until(EC.element_to_be_clickable(
-                        (By.XPATH, "//button[contains(., 'Download latest excel file')]")
+                        (By.XPATH,
+                         "//button[contains(., 'Download latest excel file') or contains(., '최신 견적서 파일 다운로드') or contains(., '견적서 파일 다운로드')]")
                     ))
                     driver.execute_script("arguments[0].click();", dl_btn)
                     time.sleep(1.5)
@@ -1716,15 +1922,17 @@ class CategoryRunner:
                     continue
 
                 # Search & Download
+                # 한국어/영어 UI 모두 대응 20260517:
+                # Search → '검색', Download → '다운로드' 한국어 라벨도 같이 매칭.
                 try:
                     search_btn = wait.until(EC.element_to_be_clickable(
-                        (By.XPATH, "//button[contains(., 'Search')]")
+                        (By.XPATH, "//button[contains(., 'Search') or contains(., '검색')]")
                     ))
                     driver.execute_script("arguments[0].click();", search_btn)
                     time.sleep(3)
 
                     dn_btn = wait.until(EC.element_to_be_clickable(
-                        (By.XPATH, "//div[@class='modal-footer']//button[contains(., 'Download')]")
+                        (By.XPATH, "//div[@class='modal-footer']//button[contains(., 'Download') or contains(., '다운로드')]")
                     ))
 
                     # 다운로드 시작 시각 기록 (이 시각 이후 mtime 만 인정 → 잔재 배제)

@@ -66,6 +66,13 @@ try:
         resize_count = 0
         add_img_count = 0 # 추가이미지 생성 개수
         
+        # API 한도 초과 수정 20260517:
+        # 옵션이 많을 때(예: 144개) 행마다 update_cell()을 호출하면
+        # 분당 쓰기 60회 한도를 초과해 APIError 429 발생.
+        # → 모든 수정사항을 메모리에 모았다가 batch_update()로 한 번에 처리.
+        from gspread.utils import rowcol_to_a1
+        batch_updates = []  # [{'range': 'A2', 'values': [['값']]}, ...] 형태로 누적
+        
         print("\n📝 [작업 내역]") 
         
         for r_idx, row in enumerate(data_rows):
@@ -74,48 +81,61 @@ try:
             # =======================================================
             # 0️⃣ [추가됨] 옵션명 쉼표(,) 제거 및 시트 동기화 (마침표 유지)
             # =======================================================
-            # 옵션1 쉼표 제거
+            # 옵션1 쉼표 제거 (배치로 누적, 즉시 호출하지 않음)
             if opt1_idx != -1 and len(row) > opt1_idx:
                 orig_o1 = str(row[opt1_idx])
                 if "," in orig_o1:
                     clean_o1 = orig_o1.replace(",", "")
-                    try:
-                        worksheet.update_cell(current_row_num, opt1_idx + 1, clean_o1)
-                        row[opt1_idx] = clean_o1 # 메모리 상의 row 데이터도 갱신 (중요!)
-                        print(f"    🔄 [시트수정] 옵션1 쉼표제거: {orig_o1} -> {clean_o1}")
-                        time.sleep(0.5) # API 제한 방지
-                    except: pass
+                    batch_updates.append({
+                        'range': rowcol_to_a1(current_row_num, opt1_idx + 1),
+                        'values': [[clean_o1]],
+                    })
+                    row[opt1_idx] = clean_o1  # 메모리 상의 row 데이터도 갱신 (중요!)
+                    print(f"    🔄 [예약] 옵션1 쉼표제거: {orig_o1} -> {clean_o1}")
             
-            # 옵션2 쉼표 제거
+            # 옵션2 쉼표 제거 (배치로 누적)
             if opt2_idx != -1 and len(row) > opt2_idx:
                 orig_o2 = str(row[opt2_idx])
                 if "," in orig_o2:
                     clean_o2 = orig_o2.replace(",", "")
-                    try:
-                        worksheet.update_cell(current_row_num, opt2_idx + 1, clean_o2)
-                        row[opt2_idx] = clean_o2 # 메모리 갱신
-                        print(f"    🔄 [시트수정] 옵션2 쉼표제거: {orig_o2} -> {clean_o2}")
-                        time.sleep(0.5)
-                    except: pass
+                    batch_updates.append({
+                        'range': rowcol_to_a1(current_row_num, opt2_idx + 1),
+                        'values': [[clean_o2]],
+                    })
+                    row[opt2_idx] = clean_o2  # 메모리 갱신
+                    print(f"    🔄 [예약] 옵션2 쉼표제거: {orig_o2} -> {clean_o2}")
 
             # =======================================================
-            # 1️⃣ 메인키워드(H열) 자동 채우기
+            # 1️⃣ 메인키워드(H열) 자동 채우기 (배치로 누적)
             # =======================================================
             if g_idx != -1 and h_idx != -1 and len(row) > max(g_idx, h_idx):
                 g_val = str(row[g_idx]).strip() 
                 h_val = str(row[h_idx]).strip() 
                 
                 if not h_val and g_val:
-                    try:
-                        worksheet.update_cell(current_row_num, h_idx + 1, g_val)
-                        fill_count += 1
-                        row[h_idx] = g_val 
-                    except Exception as e:
-                        pass
+                    batch_updates.append({
+                        'range': rowcol_to_a1(current_row_num, h_idx + 1),
+                        'values': [[g_val]],
+                    })
+                    fill_count += 1
+                    row[h_idx] = g_val
+        
+        # ⚡ [배치 적용] 누적된 수정사항을 한 번의 API 호출로 처리
+        if batch_updates:
+            try:
+                print(f"\n⚡ 시트 일괄 업데이트 중... ({len(batch_updates)}건)")
+                worksheet.batch_update(batch_updates)
+                print(f"✅ 일괄 업데이트 완료!")
+            except Exception as e:
+                print(f"⚠️ 일괄 업데이트 오류: {e}")
+        
+        # =======================================================
+        # 2️⃣ 파일명 변경 + 추가이미지 생성 (시트 작업 후 진행)
+        # =======================================================
+        # 위에서 배치로 시트는 업데이트했으므로, 여기서는 순수 파일 작업만 수행.
+        for r_idx, row in enumerate(data_rows):
+            current_row_num = r_idx + 2
 
-            # =======================================================
-            # 2️⃣ 파일명 변경 + [400px 자동 확대]
-            # =======================================================
             if len(row) <= path_idx or len(row) <= temp_idx: continue
 
             sheet_path = str(row[path_idx]).strip()
