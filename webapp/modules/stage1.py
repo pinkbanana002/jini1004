@@ -121,7 +121,7 @@ def run_stage1(config: dict, log, progress, should_stop):
         # 영향: FORCE-DEBUG, CLASSIFY, GROUP-DIAG, DEBUG-DIAG, DEBUG-PRICE,
         #       DEBUG-IMG, wait_for_page 내부 DEBUG 등 진단용 print만 토글.
         # 메인 흐름 print (▶️/🎉/⚡/📌/💰/📸/✅) 는 항상 출력.
-        DIAG_LOG = False
+        DIAG_LOG = True
 
         # 진단 로그 필터: stdout 의 write 를 가로채서 진단 키워드 들어간 줄은 버림.
         # (print 자체를 가리는 방식은 Python 스코프 규칙 때문에 안전하지 않아서 stdout 레벨에서 처리)
@@ -244,6 +244,8 @@ def run_stage1(config: dict, log, progress, should_stop):
         options.add_argument("--lang=ko-KR")
         options.add_argument("--disable-gpu")
         options.add_argument("--no-sandbox")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--user-data-dir=" + os.path.join(BASE_DRIVE, "chrome_auto_profile"))
 
         prefs = {
             "translate_whitelists": {"zh-CN": "ko"},
@@ -257,6 +259,17 @@ def run_stage1(config: dict, log, progress, should_stop):
 
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
+        try:
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": (
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+                    "window.chrome = window.chrome || { runtime: {} };"
+                    "Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});"
+                    "Object.defineProperty(navigator, 'languages', {get: () => ['ko-KR','ko','en-US','en']});"
+                )
+            })
+        except Exception as _stealth_e:
+            print("    ⚠️ 봇 위장 주입 실패:", _stealth_e)
         driver.implicitly_wait(10)
         print("✅ 브라우저 실행 성공!")
 
@@ -569,7 +582,7 @@ def run_stage1(config: dict, log, progress, should_stop):
                         if '¥' in tmp:
                             tmp = tmp.split('¥')[0].strip()
                         tmp = ' '.join(tmp.split())
-                        if tmp and re.search(r'[가-힣一-鿿]', tmp):
+                        if tmp and (re.search(r'[가-힣一-鿿]', tmp) or re.fullmatch(r'\d{1,3}', tmp)):
                             name = tmp
                     # 셀러라이프 UI 변경 대응 20260505 (필터 완화):
                     # img alt에서 직접 가져오므로 글자 수 제한을 1자+로 완화.
@@ -581,7 +594,10 @@ def run_stage1(config: dict, log, progress, should_stop):
                     # is_pure_number 필터로 교체.
                     text_chars_kr_cn = re.findall(r'[가-힣一-鿿]', name)
                     is_pure_number = bool(name) and re.fullmatch(r'[\d.,\s¥₩원]+', name) is not None
-                    if len(text_chars_kr_cn) < 1 or is_pure_number:
+                    # 색상명이 없고 번호(1,2,3...)로만 구분되는 상품 대응 20260707:
+                    # 1~3자리 순수 숫자는 색상 인덱스로 보고 통과, 그 외 순수 숫자/통화는 계속 제외
+                    is_index_label = bool(name) and re.fullmatch(r'\d{1,3}', name) is not None
+                    if (len(text_chars_kr_cn) < 1 and not is_index_label) or (is_pure_number and not is_index_label):
                         continue
                     img_src = ''
                     try:

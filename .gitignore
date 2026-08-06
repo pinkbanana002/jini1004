@@ -32,3 +32,12 @@ webapp/_backups/
 # OS
 .DS_Store
 Thumbs.db
+chrome_profile_stage1/
+.venv312/
+.git.zip
+chrome_auto_profile/
+chrome_profile/
+chrome_profile_stage1/
+webapp/.venv312/
+temp_downloads/
+gitstatus.txt
