@@ -147,7 +147,13 @@ try:
                 target_base = row[opt1_idx]
             else:
                 val = str(row[full_idx]) if len(row) > full_idx else ""
-                target_base = val.split()[0]
+                _parts = val.split()
+                if _parts:
+                    target_base = _parts[0]
+                else:
+                    # 옵션/한글옵션이 모두 비어 파일명 만들 재료가 없을 때:
+                    # 임시파일명(temp_name)에서 확장자를 떼어 대체 사용 (크래시 방지)
+                    target_base = os.path.splitext(temp_name)[0] if temp_name else "product"
                 
             target_base = sanitize_filename(target_base)
             
