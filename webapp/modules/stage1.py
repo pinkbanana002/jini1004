@@ -239,43 +239,101 @@ def run_stage1(config: dict, log, progress, should_stop):
         _t_start("Cell 3: 크롬 브라우저 실행")
         print("▶️ [ Cell 3 ] 크롬 브라우저를 설정하고 실행합니다...")
 
+        # ==========================================================
+        # [ATTACH 방식] 개인 크롬을 디버그 포트로 띄우고 붙는다 (봇 감지 우회)
+        #   2단계 쿠팡(cell_8)과 동일 방식. 로그인 세션을 그대로 재사용.
+        # ==========================================================
+        import subprocess as _sp
+        _DEBUG_PORT = 9223
+        _PROFILE_DIR = os.path.join(BASE_DRIVE, "chrome_auto_profile")
+
+        # 이 프로필+포트로 떠 있던 기존 크롬만 정리
+        try:
+            _cmd = ('wmic process where "name=\'chrome.exe\' and commandline like '
+                    '\'%%remote-debugging-port=' + str(_DEBUG_PORT) + '%%\'" get processid')
+            _out = _sp.check_output(_cmd, shell=True, encoding='utf-8', errors='replace')
+            for _p in _out.split():
+                if _p.isdigit():
+                    os.system('taskkill /F /PID ' + _p + ' > nul 2>&1')
+            time.sleep(1)
+        except Exception:
+            pass
+
+        _chrome_paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.join(os.getenv('LOCALAPPDATA', ''), r'Google\Chrome\Application\chrome.exe'),
+        ]
+        _chrome_exe = next((p for p in _chrome_paths if os.path.exists(p)), None)
+        if not _chrome_exe:
+            raise RuntimeError("크롬 실행파일을 찾을 수 없습니다.")
+
+        _target_url = "https://sellochomes.co.kr/sourcinglife/"
+        _launch = [
+            _chrome_exe,
+            "--remote-debugging-port=" + str(_DEBUG_PORT),
+            "--user-data-dir=" + _PROFILE_DIR,
+            "--lang=ko-KR",
+            "--disable-features=Translate",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--start-maximized",
+            _target_url,
+        ]
+        _sp.Popen(_launch)
+        print("▶️ [ Cell 3 ] 크롬 실행(attach 모드) 완료. 연결 대기...")
+        time.sleep(5)
+
+        # 디버그 포트로 attach
         options = webdriver.ChromeOptions()
-        options.add_argument("--start-maximized")
-        options.add_argument("--lang=ko-KR")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--user-data-dir=" + os.path.join(BASE_DRIVE, "chrome_auto_profile"))
-
-        prefs = {
-            "translate_whitelists": {"zh-CN": "ko"},
-            "translate": {"enabled": "true"},
-            "download.default_directory": MY_DOWNLOAD_DIR,
-            "download.prompt_for_download": False,
-            "profile.default_content_settings.popups": 0,
-            "safebrowsing.enabled": True,
-        }
-        options.add_experimental_option("prefs", prefs)
-
+        options.add_experimental_option("debuggerAddress", "127.0.0.1:" + str(_DEBUG_PORT))
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
-        try:
-            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-                "source": (
-                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-                    "window.chrome = window.chrome || { runtime: {} };"
-                    "Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});"
-                    "Object.defineProperty(navigator, 'languages', {get: () => ['ko-KR','ko','en-US','en']});"
-                )
-            })
-        except Exception as _stealth_e:
-            print("    ⚠️ 봇 위장 주입 실패:", _stealth_e)
         driver.implicitly_wait(10)
-        print("✅ 브라우저 실행 성공!")
+        print("✅ 브라우저 연결 성공!")
 
-        target_url = "https://sellochomes.co.kr/sourcinglife/"
-        print(f"▶️ 사이트로 이동합니다: {target_url}")
-        driver.get(target_url)
+        # 다운로드 경로 지정 (attach 모드에서는 prefs 대신 CDP 사용)
+        try:
+            driver.execute_cdp_cmd("Page.setDownloadBehavior",
+                                   {"behavior": "allow", "downloadPath": MY_DOWNLOAD_DIR})
+        except Exception:
+            pass
+
+        # 로그인 페이지로 튕기면 사용자 로그인 대기 (최대 3분, 자동 감지)
+        try:
+            _cur = driver.current_url
+        except Exception:
+            _cur = ""
+        if "/auth/login" in _cur or "로그인" in (driver.title or ""):
+            print("=" * 58)
+            print("⛔ 셀록홈즈 로그인이 필요합니다.")
+            print("👉 방금 열린 크롬 창에서 '구글로 시작하기' 등으로 로그인해주세요.")
+            print("   로그인되면 자동으로 감지하여 진행합니다 (최대 3분 대기)...")
+            print("=" * 58)
+            _deadline = time.time() + 180
+            while time.time() < _deadline:
+                if should_stop():
+                    raise Stopped()
+                time.sleep(3)
+                try:
+                    _u = driver.current_url
+                    _t = driver.title or ""
+                except Exception:
+                    continue
+                # 로그인 페이지를 벗어나면 통과
+                if "/auth/login" not in _u and "로그인" not in _t:
+                    print("✅ 로그인 감지 → 자동 진행합니다.")
+                    break
+            else:
+                print("⏰ 3분 경과 — 그대로 진행을 시도합니다.")
+
+        # 상품 크롤링을 위해 소싱라이프 메인 확보
+        try:
+            if "sourcinglife" not in (driver.current_url or ""):
+                driver.get(_target_url)
+                time.sleep(2)
+        except Exception:
+            pass
         print(f"✅ 접속 성공! 현재 페이지: {driver.title}")
         _t_end("Cell 3: 크롬 브라우저 실행")
         if should_stop(): raise Stopped()
