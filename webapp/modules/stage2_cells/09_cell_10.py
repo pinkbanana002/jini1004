@@ -80,8 +80,9 @@ try:
             done_sheet = doc.add_worksheet('완료', rows=1000, cols=30)
             
         # ‼️ [보강] 백업 시트가 비어있다면 헤더(제목줄)부터 넣어주기
-        if len(done_sheet.get_all_values()) == 0:
-            done_sheet.append_row(target_df.columns.tolist())
+        try:
+            if done_sheet.col_count > 26: done_sheet.resize(rows=done_sheet.row_count, cols=26)
+        except Exception: pass
 
         # 데이터 추가 (append)
         if len(done_sheet.get_all_values()) == 0:
