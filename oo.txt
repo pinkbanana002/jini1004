@@ -1,0 +1,18 @@
+       # [A] '완료' 시트로 백업
+        try:
+            done_sheet = doc.worksheet('완료')
+        except:
+            print("    🆕 '완료' 시트가 없어서 새로 만듭니다.")
+            done_sheet = doc.add_worksheet('완료', rows=1000, cols=30)
+            
+        # ‼️ [보강] 백업 시트가 비어있다면 헤더(제목줄)부터 넣어주기
+        if len(done_sheet.get_all_values()) == 0:
+            done_sheet.append_row(target_df.columns.tolist())
+
+        # 데이터 추가 (append)
+        _dv=done_sheet.get_all_values()
+        _dh=[c for c in (_dv[0] if _dv else []) if str(c).strip()!=""]
+        if not _dh:
+            _dh=target_df.columns.tolist()
+            done_sheet.append_row(_dh)
+        _al=target_df.

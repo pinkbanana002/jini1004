@@ -52,6 +52,20 @@ def _supplier_auto_login(driver, log, should_stop, max_retries=2):
     except Exception:
         pass
 
+    # [보강] URL에 'login'이 남아있어도, 실제 로그인 폼(password 칸)이 없으면
+    #        이미 로그인된 상태로 간주하고 바로 통과 (불필요한 재시도/에러 방지).
+    try:
+        _pw_fields = [
+            _el for _el in driver.find_elements(By.TAG_NAME, "input")
+            if (_el.get_attribute("type") or "").lower() == "password"
+            and _el.is_displayed()
+        ]
+        if not _pw_fields:
+            log("✅ 서플라이허브 이미 로그인됨(로그인 폼 없음) → 자동 진행.", level="success")
+            return True
+    except Exception:
+        pass
+
     attempts = max_retries + 1
     for attempt in range(1, attempts + 1):
         if should_stop():

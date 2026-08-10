@@ -52,8 +52,8 @@ try:
     # 2. 시트 데이터 읽기
     if 'doc' not in globals(): raise NameError("구글 시트 연결 끊김")
     worksheet = doc.worksheet('상품등록목록')
-    raw_data = worksheet.get_all_records()
-    df = pd.DataFrame(raw_data)
+    _rv = worksheet.get_all_values()
+    df = pd.DataFrame(_rv[1:], columns=_rv[0]) if _rv else pd.DataFrame()
     
     # 작업 대상 (변환상품명이 있고, 아직 폴더가 남아있는 것들)
     target_df = df[df['변환상품명'] != ""].drop_duplicates(subset=['변환상품명'])
@@ -64,7 +64,8 @@ try:
     print("    - 구글 시트의 데이터를 '완료' 시트로 백업 후 초기화합니다.")
     print("="*50)
 
-    user_input = input("🚀 정리 작업을 시작하려면 [Enter]를 누르세요 (취소: n): ")
+    # [웹앱] 자동 진행: Enter 프롬프트 없이 바로 정리 작업 수행
+    user_input = ""
     
     if user_input.strip().lower() == 'n':
         print("⛔ 작업이 취소되었습니다.")
@@ -80,10 +81,12 @@ try:
             
         # ‼️ [보강] 백업 시트가 비어있다면 헤더(제목줄)부터 넣어주기
         if len(done_sheet.get_all_values()) == 0:
-            done_sheet.append_row(df.columns.tolist())
+            done_sheet.append_row(target_df.columns.tolist())
 
         # 데이터 추가 (append)
-        done_sheet.append_rows(df.values.tolist()) 
+        if len(done_sheet.get_all_values()) == 0:
+            done_sheet.append_row(target_df.columns.tolist())
+        done_sheet.append_rows(target_df.astype(str).values.tolist())
         print("    ✅ '완료' 시트로 데이터 복사 완료.")
 
         # [B] 폴더 이동
