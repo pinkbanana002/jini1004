@@ -56,7 +56,7 @@ try:
     df = pd.DataFrame(_rv[1:], columns=_rv[0]) if _rv else pd.DataFrame()
     
     # 작업 대상 (변환상품명이 있고, 아직 폴더가 남아있는 것들)
-    target_df = df[df['변환상품명'] != ""].drop_duplicates(subset=['변환상품명'])
+    target_df = df[df['변환상품명'] != ""].drop_duplicates(subset=['변환상품명', '옵션1'])
     
     print("\n" + "="*50)
     print(f"🧐 [최종 검수 단계] 총 {len(target_df)}개의 상품이 정리 대상입니다.")
