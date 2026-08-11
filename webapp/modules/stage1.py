@@ -1150,7 +1150,7 @@ def run_stage1(config: dict, log, progress, should_stop):
 
         def purify_option_name(name):
             if not name: return ""
-            pure = re.split(r'(재고|가격|개|元|위안|:)', str(name))[0].strip()
+            pure = re.split(r'(재고|가격|\d+\s*개|元|위안|:)', str(name))[0].strip()
             return re.sub(r'[\\/*?:"<>|]', "", pure).strip()
 
         def get_cached_translation(text):

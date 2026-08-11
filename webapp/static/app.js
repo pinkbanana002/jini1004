@@ -514,8 +514,12 @@ function showChecklistModal() {
 
     const boxes = modal.querySelectorAll(".check-item");
     const proceed = document.getElementById("btn-checklist-proceed");
+    if ([...boxes].every((x) => x.checked)) { proceed.disabled=false; setTimeout(() => proceed.click(), 400); }
     boxes.forEach((b) => b.addEventListener("change", () => {
-        proceed.disabled = ![...boxes].every((x) => x.checked);
+        const allChecked = [...boxes].every((x) => x.checked);
+        proceed.disabled = !allChecked;
+        // 3개 모두 체크되면 버튼 클릭 없이 자동으로 2단계로 진행
+        if (allChecked) { setTimeout(() => proceed.click(), 400); }
     }));
     document.getElementById("btn-checklist-later").addEventListener("click", () => {
         state.checklistDismissed = true;
