@@ -71,6 +71,7 @@ FIXED_VALUES = {
     "FIXED_WASH": "상세페이지 참조",
     "FIXED_WARRANTY": "제품 이상 시 공정거래위원회 고시 소비자분쟁해결 기준에 의거 보상합니다",
     "FIXED_NA": "해당사항없음",
+    "FIXED_COMPOSITION": "본품",
     "FIXED_SHELF_LIFE": 0 
 }
 
@@ -82,7 +83,9 @@ MAPPING_CONFIG = {
     "검색태그": "태그", "색상": "CLEAN_COLOR_NAME", "사이즈": "사이즈", "대표이미지": "전체옵션명",
     "상세이미지": detail_col_name,          
     "수량": "CALC_SET_COUNT", 
-    "차트": "FIXED_SIZE_CHART", "대체": "한글 옵션명",
+    "차트": "FIXED_SIZE_CHART", "대체": "변환상품명",
+    "구성": "FIXED_COMPOSITION", "세부사양": "메인키워드", "세부 사양": "메인키워드",
+    "KC": "FIXED_NA", "인증정보": "FIXED_NA",
     "SKU": "FIXED_SKU_COUNT", "행어": "FIXED_HANGER", "포장무게": "CALC_WEIGHT",
     "단품포장": "포장사이즈", "소재": "재질", "재질": "재질", "치수": "FIXED_DIMENSION",
     "출시": "FIXED_YEAR", "계절": "FIXED_SEASON",

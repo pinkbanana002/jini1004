@@ -1,0 +1,41 @@
+        def wait_for_page(drv, timeout=10):
+            # 속도개선 20260814: 진단 5종을 DEBUG_VERBOSE 로 스위치. 문제 생기면 True 로.
+            # ⚠️ 대기 로직(WebDriverWait)과 return 은 절대 건드리지 않음.
+            DEBUG_VERBOSE = False
+            try:
+                if DEBUG_VERBOSE:
+                    try:
+                        print(f"    🔍 [DEBUG] current_url: {drv.current_url}")
+                    except Exception: pass
+                    try:
+                        print(f"    🔍 [DEBUG] title: {drv.title}")
+                    except Exception: pass
+                    try:
+                        body_preview = drv.find_element(By.TAG_NAME, 'body').text[:500]
+                        print(f"    🔍 [DEBUG] body 첫500자:\n{body_preview}")
+                    except Exception: pass
+                    try:
+                        oc_cnt = len(drv.find_elements(By.CSS_SELECTOR, 'img.object-contain'))
+                        print(f"    🔍 [DEBUG] img.object-contain 개수: {oc_cnt}")
+                    except Exception: pass
+                    try:
+                        all_imgs = drv.find_elements(By.TAG_NAME, 'img')
+                        ali_cnt = sum(1 for img in all_imgs if 'alicdn' in (img.get_attribute('src') or ''))
+                        print(f"    🔍 [DEBUG] alicdn img 개수: {ali_cnt} / 전체 img: {len(all_imgs)}")
+                    except Exception: pass
+                # lazy fix 20260429 셀러라이프UI: 셀렉터 교체 — alicdn img 1개 이상 등장 대기
+                # (스크롤 블록은 관련상품 가격이 body 텍스트에 섞여 parse_body_text 부작용 → 제거)
+                WebDriverWait(drv, timeout).until(
+                    lambda d: any(
+                        'alicdn' in (img.get_attribute('src') or '')
+                        for img in d.find_elements(By.TAG_NAME, 'img')
+                    )
+                )
+                # 안정화 마진 랜덤화 20260512: 0.3 고정 → 0.15~0.25 랜덤
+                time.sleep(random.uniform(0.15, 0.25))
+                return True
+            except Exception as e:
+                try:
+                    print(f"    🔍 [DEBUG] wait_for_page 실패: {type(e).__name__}: {str(e)[:200]}")
+                except Exception: pass
+                return False

@@ -897,7 +897,7 @@ def run_stage1(config: dict, log, progress, should_stop):
                     if nat_h <= 0:
                         classification = "제외(차원미상)"
                     elif nat_w == nat_h:
-                        if nat_w >= 1000:
+                        if nat_w >= 700:
                             classification = "DETAIL"
                             detail_imgs.append(use_src)
                         else:

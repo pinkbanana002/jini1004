@@ -128,7 +128,8 @@ def make_final_detail_fast(row, detail_dir, save_path):
         material = str(row.get('재질', '상세페이지 참조')).strip() or "상세페이지 참조"
         
         rep_dir = str(row.get('대표이미지경로', '')).strip()
-        if not rep_dir or not os.path.exists(rep_dir): return False
+        if not rep_dir or not os.path.exists(rep_dir):
+            print(f'    [7-2 FAIL] 대표이미지경로 없음/미존재: {rep_dir!r}'); return False
 
         if str(row.get('옵션2', '')).strip(): 
             rep_dir = os.path.join(rep_dir, "copy")
@@ -140,7 +141,8 @@ def make_final_detail_fast(row, detail_dir, save_path):
             search = glob.glob(os.path.join(rep_dir, f"*{sanitize_filename(opt1_val)}*.jpg"))
             if not search: 
                 search = glob.glob(os.path.join(rep_dir, f"*{sanitize_filename(opt1_val)}*.png"))
-                if not search: return False
+                if not search:
+                    print(f'    [7-2 FAIL] 옵션이미지 못찾음 dir={rep_dir!r} sku={full_sku!r} opt1={opt1_val!r}'); return False
             exact_img = search[0]
 
         logo = GLOBAL_LOGO.copy() if GLOBAL_LOGO else None
@@ -195,7 +197,7 @@ def make_final_detail_fast(row, detail_dir, save_path):
         canvas.save(save_path, "JPEG", quality=85, optimize=False)
         return True
     except Exception as e:
-        return False
+        print(f'    [7-2 FAIL] 예외: {e}'); return False
 
 # --- 메인 실행 ---
 try:
