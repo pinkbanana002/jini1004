@@ -75,7 +75,9 @@ FIXED_VALUES = {
     "FIXED_SHELF_LIFE": 0 
 }
 
-# ==== 카테고리 자동선택 20260814 ====
+# ==============================================================
+# 카테고리 자동선택 (키워드매칭 → 기타폴백) 20260814
+# ==============================================================
 def _get_category_options(wb):
     import re as _re
     from openpyxl.utils import column_index_from_string as _cifs
@@ -85,11 +87,12 @@ def _get_category_options(wb):
             _dest = wb.defined_names[_name].value
             _m = _re.match(r"'?([^'!]+)'?!\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)", _dest)
             if _m:
-                _sh,_c1,_r1,_c2,_r2 = _m.group(1),_m.group(2),int(_m.group(3)),_m.group(4),int(_m.group(5))
-                _ws = wb[_sh]; _ci1,_ci2 = _cifs(_c1),_cifs(_c2)
-                for _r in range(_r1,_r2+1):
-                    for _c in range(_ci1,_ci2+1):
-                        _v = _ws.cell(_r,_c).value
+                _sh, _c1, _r1, _c2, _r2 = _m.group(1), _m.group(2), int(_m.group(3)), _m.group(4), int(_m.group(5))
+                _ws = wb[_sh]
+                _ci1, _ci2 = _cifs(_c1), _cifs(_c2)
+                for _r in range(_r1, _r2 + 1):
+                    for _c in range(_ci1, _ci2 + 1):
+                        _v = _ws.cell(_r, _c).value
                         if _v: opts.append(str(_v))
     return opts
 
@@ -98,10 +101,12 @@ def _pick_category(product_name, keyword, options):
     _text = f"{product_name} {keyword}"
     for _opt in options:
         _leaf = _opt.split('>')[-1].split('(')[0].strip()
-        _core = _leaf.replace('운동기구','').replace('용품','').replace('소품','').replace('교정','').replace('/','').strip()
-        if _core and _core in _text: return _opt
+        _core = _leaf.replace('운동기구','').replace('용품','').replace('소품','').replace('/','').strip()
+        if _core and _core in _text:
+            return _opt
     for _opt in options:
-        if '기타' in _opt: return _opt
+        if '기타' in _opt:
+            return _opt
     return options[0]
 
 MAPPING_CONFIG = {
@@ -244,9 +249,9 @@ for idx, row in folder_list_df.iterrows():
                 
                 elif "카테고리" in clean_h:
                     try:
-                        _co = _get_category_options(wb_tgt)
-                        val = _pick_category(str(data.get('변환상품명','')), str(data.get('메인키워드','')), _co)
-                    except Exception:
+                        _cat_opts = _get_category_options(wb_tgt)
+                        val = _pick_category(str(data.get('변환상품명','')), str(data.get('메인키워드','')), _cat_opts)
+                    except Exception as _ce:
                         val = None
                 elif "품명" in clean_h or "모델명" in clean_h: val = data.get('전체옵션명')
                 elif info['key']:
