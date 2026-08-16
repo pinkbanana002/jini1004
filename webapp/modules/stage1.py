@@ -1534,6 +1534,7 @@ def run_stage1(config: dict, log, progress, should_stop):
             idx_prod_link = find_col(['상품링크'])
             idx_img_url = find_col(['대표이미지링크', '이미지링크'])
             idx_trans_name = find_col(['변환상품명'])
+            idx_main_kw = find_col(['메인키워드'])
             idx_full_name = find_col(['전체옵션명'])
             idx_tags = find_col(['태그', '검색태그'])
             idx_kor_opt = find_col(['한글옵션명'])
@@ -1607,6 +1608,12 @@ def run_stage1(config: dict, log, progress, should_stop):
                         unchanged_list.append(f"📍 {row_num}행: 상품명이 변경되지 않았거나 너무 짧음 ({ai_name})")
                     col_letter = openpyxl.utils.get_column_letter(idx_trans_name + 1)
                     updates.append({'range': f"{col_letter}{row_num}", 'values': [[ai_name]]})
+                    # 메인키워드 자동채움 20260816: 변환상품명(ai_name)에 '헬스' 있으면
+                    # '기타헬스소품', 없으면 변환상품명 그대로(검수는 수동). 1단계에서 바로 채움.
+                    if idx_main_kw != -1:
+                        _kw = '기타헬스소품' if '헬스' in ai_name else ai_name
+                        col_letter = openpyxl.utils.get_column_letter(idx_main_kw + 1)
+                        updates.append({'range': f"{col_letter}{row_num}", 'values': [[_kw]]})
                     if idx_tags != -1 and ai_tags:
                         col_letter = openpyxl.utils.get_column_letter(idx_tags + 1)
                         updates.append({'range': f"{col_letter}{row_num}", 'values': [[ai_tags]]})
