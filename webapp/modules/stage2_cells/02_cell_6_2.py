@@ -160,9 +160,11 @@ try:
             # --- [파일명 변경 및 확대 로직 시작] ---
             if os.path.exists(sheet_path):
                 # A. 대표이미지 처리
+                _base_noext = os.path.splitext(temp_name)[0] if temp_name.lower().endswith(('.jpg','.png','.jpeg','.webp')) else temp_name
                 candidates = [temp_name]
-                if not temp_name.lower().endswith(('.jpg', '.png', '.jpeg')):
-                      candidates.append(temp_name + ".jpg")
+                for _ext in ('.jpg','.png','.jpeg','.webp'):
+                    _c = _base_noext + _ext
+                    if _c not in candidates: candidates.append(_c)
 
                 for cand in candidates:
                     old_file = os.path.join(sheet_path, cand)

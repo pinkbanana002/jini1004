@@ -116,7 +116,7 @@ MAPPING_CONFIG = {
     "구성": "FIXED_COMPOSITION", "세부사양": "메인키워드", "세부 사양": "메인키워드",
     "KC": "FIXED_NA", "인증정보": "FIXED_NA",
     "SKU": "FIXED_SKU_COUNT", "행어": "FIXED_HANGER", "포장무게": "CALC_WEIGHT",
-    "단품포장": "포장사이즈", "크기": "무게", "소재": "재질", "재질": "재질", "치수": "FIXED_DIMENSION",
+    "단품포장": "포장사이즈", "크기": "무게", "중량": "무게", "소재": "재질", "재질": "재질", "치수": "FIXED_DIMENSION",
     "출시": "FIXED_YEAR", "계절": "FIXED_SEASON",
     "취급": "FIXED_WASH", "주의": "FIXED_WASH",
     "보증": "FIXED_WARRANTY", "AS": "FIXED_PHONE",
