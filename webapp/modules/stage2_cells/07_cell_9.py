@@ -116,7 +116,7 @@ MAPPING_CONFIG = {
     "구성": "FIXED_COMPOSITION", "세부사양": "메인키워드", "세부 사양": "메인키워드",
     "KC": "FIXED_NA", "인증정보": "FIXED_NA",
     "SKU": "FIXED_SKU_COUNT", "행어": "FIXED_HANGER", "포장무게": "CALC_WEIGHT",
-    "단품포장": "포장사이즈", "크기": "무게", "중량": "무게", "소재": "재질", "재질": "재질", "치수": "FIXED_DIMENSION",
+    "단품포장": "포장사이즈", "크기": "무게", "중량": "CALC_WEIGHT_KG", "소재": "재질", "재질": "재질", "치수": "FIXED_DIMENSION",
     "출시": "FIXED_YEAR", "계절": "FIXED_SEASON",
     "취급": "FIXED_WASH", "주의": "FIXED_WASH",
     "보증": "FIXED_WARRANTY", "AS": "FIXED_PHONE",
@@ -159,6 +159,12 @@ for idx, row in folder_list_df.iterrows():
         for data in src_data:
             try: data['CALC_WEIGHT'] = int(''.join(filter(str.isdigit, str(data.get('무게', 0)))) or 0) + 10
             except: data['CALC_WEIGHT'] = 10
+            # 중량 kg 변환 20260816: 무게(g) -> "X.Xkg" (소비자 표기)
+            try:
+                _wg = int(''.join(filter(str.isdigit, str(data.get('무게', 0)))) or 0)
+                _kg = _wg / 1000.0
+                data['CALC_WEIGHT_KG'] = (str(int(_kg)) if _kg == int(_kg) else str(round(_kg, 2))) + "kg"
+            except: data['CALC_WEIGHT_KG'] = ""
             
             opt1 = str(data.get('옵션1', '')).strip()
             full_opt = str(data.get('한글 옵션명', '')).strip()
