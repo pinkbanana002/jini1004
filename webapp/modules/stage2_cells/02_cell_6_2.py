@@ -112,13 +112,16 @@ try:
                 g_val = str(row[g_idx]).strip() 
                 h_val = str(row[h_idx]).strip() 
                 
+                # 메인키워드 자동채움 규칙 20260816:
+                # 변환상품명에 '헬스' 있으면 → '기타헬스소품', 없으면 → 변환상품명 그대로(내가 검수)
                 if not h_val and g_val:
+                    _kw = '기타헬스소품' if '헬스' in g_val else g_val
                     batch_updates.append({
                         'range': rowcol_to_a1(current_row_num, h_idx + 1),
-                        'values': [[g_val]],
+                        'values': [[_kw]],
                     })
                     fill_count += 1
-                    row[h_idx] = g_val
+                    row[h_idx] = _kw
         
         # ⚡ [배치 적용] 누적된 수정사항을 한 번의 API 호출로 처리
         if batch_updates:
