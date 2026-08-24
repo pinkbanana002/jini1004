@@ -1271,18 +1271,56 @@ def run_stage1(config: dict, log, progress, should_stop):
             print(f"   ✅ 성공: {success_cnt}장")
             print(f"   ❌ 실패: {len(failed_list)}장")
             # 상세이미지 정리: 중복제거 → 광고/브랜드 거르기 → 6장 채택 → 채택분 한글화
-            detail_mode = os.getenv("DETAIL_IMAGE_FILTER", os.getenv("DETAIL_IMAGE_TEXT_MODE", "on"))
+            #  (옛 DETAIL_IMAGE_TEXT_MODE=none 설정과 무관하게 기본 ON)
+            detail_mode = os.getenv("DETAIL_IMAGE_FILTER", "on")
             if str(detail_mode).lower() not in ("none", "off", "0", "false"):
-                print(f"\n🖼️ [상세페이지 정리] 중복제거 + 광고거르기 + 6장 채택 + 한글화")
-                try:
-                    from modules.detail_image_filter import process_folder as _clean_detail
-                    for dd in det_dirs:
-                        try:
-                            _clean_detail(dd)
-                        except Exception as e:
-                            print(f"    ⚠️ 처리 실패 ({dd}): {e}")
-                except Exception as e:
-                    print(f"    ⚠️ 상세이미지 정리 모듈 로드 실패: {e}")
+                # 처리할 상세페이지 폴더 모으기 (det_dirs 우선, 비면 현재 작업폴더 스캔)
+                _targets = [d for d in det_dirs if os.path.isdir(d)]
+                if not _targets:
+                    import glob as _glob
+                    _targets = [d for d in _glob.glob(os.path.join(os.getcwd(), "*", "상세페이지"))
+                                if os.path.isdir(d)]
+                print(f"\n🖼️ [상세페이지 정리] 대상 폴더 {len(_targets)}개 "
+                      f"(중복제거+광고거르기+6장채택+한글화)")
+                if _targets:
+                    try:
+                        from modules.detail_image_filter import process_folder as _clean_detail
+                        for dd in _targets:
+                            try:
+                                print(f"    ▶ 정리: {os.path.basename(os.path.dirname(dd))}")
+                                _clean_detail(dd)
+                            except Exception as e:
+                                print(f"    ⚠️ 처리 실패 ({dd}): {e}")
+                    except Exception as e:
+                        import traceback
+                        print(f"    ⚠️ 상세이미지 정리 모듈 로드 실패: {e}")
+                        traceback.print_exc()
+                else:
+                    print("    (처리할 상세페이지 폴더를 못 찾았습니다)")
+
+            # 대표이미지 스튜디오 배경 변환 (Gemini 이미지 모델)
+            main_mode = os.getenv("MAIN_IMAGE_STUDIO", "on")
+            if str(main_mode).lower() not in ("none", "off", "0", "false"):
+                _main_targets = [d for d in det_dirs
+                                 if os.path.isdir(os.path.join(os.path.dirname(d), "대표이미지"))]
+                _main_dirs = [os.path.join(os.path.dirname(d), "대표이미지") for d in _main_targets]
+                if not _main_dirs:
+                    import glob as _glob2
+                    _main_dirs = [d for d in _glob2.glob(os.path.join(os.getcwd(), "*", "대표이미지"))
+                                  if os.path.isdir(d)]
+                print(f"\n🎨 [대표이미지 스튜디오] 대상 폴더 {len(_main_dirs)}개")
+                if _main_dirs:
+                    try:
+                        from modules.main_image_studio import process_main_images as _studio
+                        for md in _main_dirs:
+                            try:
+                                _studio(md)
+                            except Exception as e:
+                                print(f"    ⚠️ 대표이미지 처리 실패 ({md}): {e}")
+                    except Exception as e:
+                        import traceback
+                        print(f"    ⚠️ 대표이미지 모듈 로드 실패: {e}")
+                        traceback.print_exc()
             for i, row in enumerate(final_sheet_rows, start=2):
                 row['원가'] = f'=S{i}*E{i}*{EXCHANGE_FACTOR}'
                 row['공급가'] = f'=ROUND(T{i}+{ADD_LOGISTICS_COST}, {ROUND_UNIT})'

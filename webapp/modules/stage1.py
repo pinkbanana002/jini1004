@@ -1271,18 +1271,56 @@ def run_stage1(config: dict, log, progress, should_stop):
             print(f"   ✅ 성공: {success_cnt}장")
             print(f"   ❌ 실패: {len(failed_list)}장")
             # 상세이미지 정리: 중복제거 → 광고/브랜드 거르기 → 6장 채택 → 채택분 한글화
-            detail_mode = os.getenv("DETAIL_IMAGE_FILTER", os.getenv("DETAIL_IMAGE_TEXT_MODE", "on"))
+            #  (옛 DETAIL_IMAGE_TEXT_MODE=none 설정과 무관하게 기본 ON)
+            detail_mode = os.getenv("DETAIL_IMAGE_FILTER", "on")
             if str(detail_mode).lower() not in ("none", "off", "0", "false"):
-                print(f"\n🖼️ [상세페이지 정리] 중복제거 + 광고거르기 + 6장 채택 + 한글화")
-                try:
-                    from modules.detail_image_filter import process_folder as _clean_detail
-                    for dd in det_dirs:
-                        try:
-                            _clean_detail(dd)
-                        except Exception as e:
-                            print(f"    ⚠️ 처리 실패 ({dd}): {e}")
-                except Exception as e:
-                    print(f"    ⚠️ 상세이미지 정리 모듈 로드 실패: {e}")
+                # 처리할 상세페이지 폴더 모으기 (det_dirs 우선, 비면 현재 작업폴더 스캔)
+                _targets = [d for d in det_dirs if os.path.isdir(d)]
+                if not _targets:
+                    import glob as _glob
+                    _targets = [d for d in _glob.glob(os.path.join(os.getcwd(), "*", "상세페이지"))
+                                if os.path.isdir(d)]
+                print(f"\n🖼️ [상세페이지 정리] 대상 폴더 {len(_targets)}개 "
+                      f"(중복제거+광고거르기+6장채택+한글화)")
+                if _targets:
+                    try:
+                        from modules.detail_image_filter import process_folder as _clean_detail
+                        for dd in _targets:
+                            try:
+                                print(f"    ▶ 정리: {os.path.basename(os.path.dirname(dd))}")
+                                _clean_detail(dd)
+                            except Exception as e:
+                                print(f"    ⚠️ 처리 실패 ({dd}): {e}")
+                    except Exception as e:
+                        import traceback
+                        print(f"    ⚠️ 상세이미지 정리 모듈 로드 실패: {e}")
+                        traceback.print_exc()
+                else:
+                    print("    (처리할 상세페이지 폴더를 못 찾았습니다)")
+            # 대표이미지 스튜디오 배경 변환 (Gemini 이미지 모델)
+            main_mode = os.getenv("MAIN_IMAGE_STUDIO", "on")
+            if str(main_mode).lower() not in ("none", "off", "0", "false"):
+                _main_targets = [d for d in det_dirs
+                                 if os.path.isdir(os.path.join(os.path.dirname(d), "대표이미지"))]
+                _main_dirs = [os.path.join(os.path.dirname(d), "대표이미지") for d in _main_targets]
+                if not _main_dirs:
+                    import glob as _glob2
+                    _main_dirs = [d for d in _glob2.glob(os.path.join(os.getcwd(), "*", "대표이미지"))
+                                  if os.path.isdir(d)]
+                print(f"\n🎨 [대표이미지 스튜디오] 대상 폴더 {len(_main_dirs)}개")
+                if _main_dirs:
+                    try:
+                        from modules.main_image_studio import process_main_images as _studio
+                        for md in _main_dirs:
+                            try:
+                                _studio(md)
+                            except Exception as e:
+                                print(f"    ⚠️ 대표이미지 처리 실패 ({md}): {e}")
+                    except Exception as e:
+                        import traceback
+                        print(f"    ⚠️ 대표이미지 모듈 로드 실패: {e}")
+                        traceback.print_exc()
+
             for i, row in enumerate(final_sheet_rows, start=2):
                 row['원가'] = f'=S{i}*E{i}*{EXCHANGE_FACTOR}'
                 row['공급가'] = f'=ROUND(T{i}+{ADD_LOGISTICS_COST}, {ROUND_UNIT})'
@@ -1393,12 +1431,15 @@ def run_stage1(config: dict, log, progress, should_stop):
                 token = token.replace(cn, ko)
             return token
 
+        def _cut20(s):
+            s = str(s).strip()
+            return s[:20].strip() if len(s) > 20 else s
+
         def translate_if_chinese(text):
             if not text:
                 return text
             if not re.search(r'[\u4e00-\u9fff]', str(text)):
-                return text
-            # 1) \uc6d0\ubcf8\uc5d0\uc11c \uc22b\uc790+\ub2e8\uc704 \ud1a0\ud070 \ucd94\ucd9c (\ud55c\uad6d\uc5b4 \ub2e8\uc704\ub85c \uce58\ud658\ud55c \ud615\ud0dc\ub85c \ubcf4\uad00)
+                return _cut20(text)
             raw_tokens = []
             for m in _unit_pattern.finditer(str(text)):
                 token = m.group()
@@ -1407,26 +1448,23 @@ def run_stage1(config: dict, log, progress, should_stop):
                     ko_token = _normalize_unit_token(token)
                     ko_unit = _normalize_unit_token(unit_m.group())
                     raw_tokens.append((ko_token, ko_unit))
-            # 2) \ubc88\uc5ed
             try:
                 time.sleep(0.2)
                 translated = translator_ai.translate(text)
             except Exception:
-                return text
+                return _cut20(text)
             if not translated:
-                return text
+                return _cut20(text)
             if not raw_tokens:
-                return translated
-            # 3) \ud55c\uad6d\uc5b4 \ub2e8\uc704 \ud0a4\uc6cc\ub4dc\uac00 \uacb0\uacfc\uc5d0 \uc0b4\uc544\uc788\ub294\uc9c0 \uac80\uc0ac (\ub300\uc18c\ubb38\uc790 \ubb34\uc2dc)
+                return _cut20(translated)
             translated_lower = translated.lower()
             missing = []
             for ko_token, ko_unit in raw_tokens:
                 if ko_unit.lower() not in translated_lower:
                     missing.append(ko_token)
-            # 4) \ub204\ub77d\ub41c \ud1a0\ud070\ub9cc \uacb0\uacfc \ub4a4\uc5d0 \uacf5\ubc31 \uad6c\ubd84\uc73c\ub85c \ucca8\ubd80
             if missing:
-                return f"{translated} {' '.join(missing)}".strip()
-            return translated
+                return _cut20(f"{translated} {' '.join(missing)}".strip())
+            return _cut20(translated)
 
         def analyze_seo_only(image_url, brand_name):
             if not model or not image_url: return None, None

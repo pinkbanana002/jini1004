@@ -24,7 +24,7 @@ detail_image_localizer.py
 .env 설정값:
     GEMINI_API_KEY=...                (이미 있음)
     GEMINI_VISION_MODEL=gemini-2.5-flash   (프로젝트에서 실제 쓰는 모델명으로 맞춰서 조정)
-    DETAIL_IMAGE_TEXT_MODE=translate       (remove | translate | none 중 기본값)
+    DETAIL_IMAGE_TEXT_MODE=none       (remove | translate | none 중 기본값)
     DETAIL_IMAGE_FONT_PATH=../fonts/NotoSansKR-Bold.ttf   (프로젝트 fonts/ 폴더의 한글 폰트 경로)
 """
 
@@ -200,24 +200,58 @@ def _sample_background_color(image_bgr: np.ndarray, x1, y1, x2, y2) -> tuple:
     return (int(r), int(g), int(b))  # PIL은 RGB
 
 
-def _fit_font(draw: ImageDraw.ImageDraw, text: str, font_path: str, box_w: int, box_h: int) -> ImageFont.FreeTypeFont:
-    """박스 크기에 맞는 최대 폰트 크기를 이진 탐색으로 찾는다."""
-    lo, hi = 6, max(6, box_h)
-    best = None
-    while lo <= hi:
-        mid = (lo + hi) // 2
+def _wrap_lines(draw, text, font, max_w):
+    """max_w 폭에 맞게 텍스트를 여러 줄로 나눈다 (띄어쓰기 우선, 안 되면 글자 단위)."""
+    words = text.split()
+    if not words:
+        return [text]
+    lines, cur = [], ""
+    for word in words:
+        test = word if not cur else cur + " " + word
+        if draw.textlength(test, font=font) <= max_w:
+            cur = test
+            continue
+        if cur:
+            lines.append(cur); cur = ""
+        if draw.textlength(word, font=font) > max_w:
+            piece = ""
+            for ch in word:
+                if draw.textlength(piece + ch, font=font) <= max_w:
+                    piece += ch
+                else:
+                    if piece: lines.append(piece)
+                    piece = ch
+            cur = piece
+        else:
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _fit_wrap(draw, text, font_path, max_w, max_h):
+    """줄바꿈까지 고려해 박스에 들어가는 폰트/줄을 찾는다. (최소 가독 크기 보장)"""
+    start = max(14, int(max_h * 0.9))
+    for size in range(start, 11, -1):
         try:
-            font = ImageFont.truetype(font_path, mid) if font_path else ImageFont.load_default()
+            font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
         except OSError:
             font = ImageFont.load_default()
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        if tw <= box_w * 0.92 and th <= box_h * 0.85:
-            best = font
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    return best or ImageFont.load_default()
+        lines = _wrap_lines(draw, text, font, max_w * 0.96)
+        line_h = size * 1.25
+        th = line_h * len(lines)
+        tw = max((draw.textlength(l, font=font) for l in lines), default=0)
+        if tw <= max_w * 0.98 and th <= max_h * 0.98:
+            return font, lines, tw, th, line_h
+    # 최소 크기(12)로라도 줄바꿈해서 반환 (안 잘리게 배경은 호출부에서 넓힘)
+    try:
+        font = ImageFont.truetype(font_path, 12) if font_path else ImageFont.load_default()
+    except OSError:
+        font = ImageFont.load_default()
+    lines = _wrap_lines(draw, text, font, max_w * 0.96)
+    line_h = 12 * 1.25
+    tw = max((draw.textlength(l, font=font) for l in lines), default=0)
+    return font, lines, tw, line_h * len(lines), line_h
 
 
 def translate_text_regions(
@@ -252,12 +286,21 @@ def translate_text_regions(
         brightness = sum(bg_color) / 3
         text_color = (30, 30, 30) if brightness > 140 else (245, 245, 245)
 
-        font = _fit_font(draw, text_ko, font_path, box_w, box_h)
-        tb = draw.textbbox((0, 0), text_ko, font=font)
-        tw, th = tb[2] - tb[0], tb[3] - tb[1]
-        tx = x1 + (box_w - tw) / 2
-        ty = y1 + (box_h - th) / 2
-        draw.text((tx, ty), text_ko, font=font, fill=text_color)
+        # 줄바꿈 + 폰트맞춤 후, 글자 블록이 박스보다 크면 배경을 넓혀서 안 잘리게
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        pbw, pbh = x2 - x1, y2 - y1
+        font, lines, tw, th, line_h = _fit_wrap(draw, text_ko, font_path, pbw, pbh)
+
+        need_w = max(pbw, tw + 12)
+        need_h = max(pbh, th + 8)
+        ex1, ey1 = int(max(0, cx - need_w / 2)), int(max(0, cy - need_h / 2))
+        ex2, ey2 = int(min(w, cx + need_w / 2)), int(min(h, cy + need_h / 2))
+        draw.rectangle([ex1, ey1, ex2, ey2], fill=bg_color)  # 넓힌 영역 다시 덮기
+
+        start_y = cy - th / 2
+        for i, line in enumerate(lines):
+            lw = draw.textlength(line, font=font)
+            draw.text((cx - lw / 2, start_y + i * line_h), line, font=font, fill=text_color)
 
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
