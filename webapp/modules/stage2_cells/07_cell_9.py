@@ -72,7 +72,8 @@ FIXED_VALUES = {
     "FIXED_WARRANTY": "제품 이상 시 공정거래위원회 고시 소비자분쟁해결 기준에 의거 보상합니다",
     "FIXED_NA": "해당사항없음",
     "FIXED_COMPOSITION": "본품",
-    "FIXED_SHELF_LIFE": 0 
+    "FIXED_SHELF_LIFE": 0,
+    "FIXED_TYPE": "상세페이지 참고"
 }
 
 # ==== 카테고리 자동선택 20260814 ====
@@ -126,6 +127,7 @@ MAPPING_CONFIG = {
     "유통기한": "FIXED_SHELF_LIFE", "소비기한": "FIXED_SHELF_LIFE",
     "라벨": "FIXED_MARK", "도안": "FIXED_MARK", "표시사항": "FIXED_MARK",
     "제조국": "FIXED_ORIGIN", "원산지": "FIXED_ORIGIN",
+    "종류": "FIXED_TYPE",
     "인증/허가": "FIXED_NA", "허가사항": "FIXED_NA"
 }
 
@@ -138,7 +140,45 @@ for idx, row in folder_list_df.iterrows():
     if not rep_img_path: continue
     rep_img_path = os.path.normpath(rep_img_path)
     prod_name = str(row.get('변환상품명', '')).strip()
-    
+
+    # 사이즈차트.jpg 자동 배치 20260831:
+    # 프로젝트 폴더의 원본 사이즈차트를 '상품 폴더 최상위'에 복사.
+    # (대표이미지/상세페이지 폴더와 같은 위치 = 견적서가 있는 폴더)
+    try:
+        import shutil as _sh
+        # 상품 폴더 = 대표이미지경로가 '...상품폴더\대표이미지' 이면 그 부모
+        _prod_dir = rep_img_path
+        if os.path.basename(_prod_dir) in ("대표이미지", "상세페이지"):
+            _prod_dir = os.path.dirname(_prod_dir)
+
+        # 원본 사이즈차트 찾기 (실행 위치가 달라도 찾도록 여러 곳 탐색)
+        _here = os.path.dirname(os.path.abspath(__file__))
+        _roots = [
+            os.getcwd(),
+            r"C:\Users\Jini\Desktop\대량클로드_로켓배송_자동화",
+            _here,
+            os.path.dirname(_here),
+            os.path.dirname(os.path.dirname(_here)),
+            os.path.dirname(os.path.dirname(os.path.dirname(_here))),
+        ]
+        _src_chart = None
+        for _r in _roots:
+            for _cand in ("사이즈차트.jpg", os.path.join("static", "사이즈차트.jpg")):
+                _p = os.path.join(_r, _cand)
+                if os.path.exists(_p):
+                    _src_chart = _p; break
+            if _src_chart: break
+
+        if _src_chart and os.path.isdir(_prod_dir):
+            _dst = os.path.join(_prod_dir, "사이즈차트.jpg")
+            if not os.path.exists(_dst):
+                _sh.copy(_src_chart, _dst)
+                print("    🧷 사이즈차트.jpg 복사 완료")
+        elif not _src_chart:
+            print("    ⚠️ 사이즈차트.jpg 원본을 찾지 못함 (프로젝트 폴더에 두세요)")
+    except Exception as _e:
+        print(f"    ⚠️ 사이즈차트 복사 실패: {_e}")
+
     print(f"\n🔹 [{idx+1}] 견적서 작성: {prod_name}")
 
     # 견적서 파일 찾기
@@ -254,7 +294,10 @@ for idx, row in folder_list_df.iterrows():
                         val = _pick_category(str(data.get('변환상품명','')), str(data.get('메인키워드','')), _co)
                     except Exception:
                         val = None
-                elif "품명" in clean_h or "모델명" in clean_h: val = data.get('전체옵션명')
+                elif "모델명" in clean_h:
+                    # 모델명: 상품마다 M1 부터 순차 증가 (M1, M2, M3 ...) 20260828
+                    val = f"M{i + 1}"
+                elif "품명" in clean_h: val = data.get('전체옵션명')
                 elif info['key']:
                     target_key = info['key']
                     if target_key == "CALC_SET_COUNT":
@@ -275,6 +318,38 @@ for idx, row in folder_list_df.iterrows():
                 if (curr is None or str(curr).strip() == "") and curr != 0:
                      if "선택" not in str(ws_tgt.cell(header_row_idx+1, col).value or ""):
                         ws_tgt.cell(row=r_idx, column=col).fill = yellow_fill
+
+        # === 종류(고시유형) 열 빈칸 채우기 20260829 ===
+        # 데이터 입력 후에도 '종류' 열에 노란 빈칸이 남는 경우가 있어,
+        # 고시명(바로 왼쪽 열)에 값이 있는 행이면 종류도 '상세페이지 참고'로 채운다.
+        try:
+            type_col = None
+            gosi_col = None
+            for _c, _info in col_map.items():
+                _h = _info.get('clean_header', '')
+                if _h == 'SKIP':
+                    continue
+                if type_col is None and '종류' in _h:
+                    type_col = _c
+                if gosi_col is None and '고시명' in _h:
+                    gosi_col = _c
+            if type_col:
+                _last = start_row + len(src_data) + 60  # 넉넉히 아래까지 검사
+                for _r in range(start_row, _last):
+                    _tv = ws_tgt.cell(row=_r, column=type_col).value
+                    if _tv is not None and str(_tv).strip() != "":
+                        continue  # 이미 값 있으면 통과
+                    # 같은 행에 데이터가 있는지 판단(고시명 또는 왼쪽칸)
+                    _ref = None
+                    if gosi_col:
+                        _ref = ws_tgt.cell(row=_r, column=gosi_col).value
+                    if _ref is None and type_col > 1:
+                        _ref = ws_tgt.cell(row=_r, column=type_col - 1).value
+                    if _ref is not None and str(_ref).strip() != "":
+                        _cell = ws_tgt.cell(row=_r, column=type_col, value="상세페이지 참고")
+                        _cell.fill = PatternFill(fill_type=None)  # 노란색 해제
+        except Exception:
+            pass
 
         # 저장
         wait_time = 1.5 + (len(src_data) * 0.05)

@@ -1,82 +1,290 @@
 # -*- coding: utf-8 -*-
 """
-detail_image_filter.py  (크롭/삭제 버전 — 번역 미사용)
-  상세페이지 이미지 정리 파이프라인.
-  흐름: 중복 제거(dHash)
-        -> 앞쪽 N장만 AI 분류(keep/crop_*/remove/drop) + 글자박스 좌표
-        -> crop: 위/아래 글자 띠 잘라내기 / remove: 글자 인페인팅 삭제
-        -> 최대 5장 채택
-
-  stage1 등에서:
-      from modules.detail_image_filter import process_folder
-      process_folder(det_dir)
-
-  * 번역(한글 얹기)은 사용하지 않는다. 자르거나 지우기만 한다.
-  * 글자 위치는 Gemini Vision으로 판단한다(정확). => GEMINI_API_KEY 필요.
+detail_image_filter.py  (단순 선별 버전)
+  중복 제거(그룹당 1장) -> 앞쪽 N장 AI 분류(keep/drop)
+  -> 걸러진 것(중복/광고/로고/글자많음)은 모두 '_삭제' 폴더 하나로
+  -> 최대 MAX_USE 장 채택. 크롭/글자삭제 없음.
 """
 import os, re, json, glob, shutil, warnings
 warnings.filterwarnings("ignore")
 from PIL import Image
+try:
+    import numpy as np
+except Exception:
+    np = None
 
-# ── 설정값 ────────────────────────────────────────────────────────────────
-MAX_USE = 6          # 최종 채택 장수
-AI_LIMIT = 10        # AI로 분류할 앞쪽 장수
-DUP_THRESHOLD = 14   # dHash 해밍거리 (클수록 더 많이 중복으로 제거 = 비용 절감)
+MAX_USE = 5
+AI_LIMIT = 10
+DUP_THRESHOLD = 10
+_DEL = "_삭제"
 
-# 크롭 안전장치: 위/아래에서 잘라낼 수 있는 최대 비율(각 변 기준).
-# 글자 띠가 이보다 두꺼우면 "제품까지 먹는다"고 보고 remove로 돌린다.
-MAX_CROP_RATIO = 0.35
+# 글씨 크롭 / 광고 감지 설정 20260828
+AD_BUSY_RATIO = 0.25     # 복잡한 줄 비율 25% 이상이면 광고로 보고 삭제
+MAX_CROP_RATIO = 0.28    # 위/아래 글씨 밴드를 잘라낼 수 있는 최대 비율(한쪽). 초과 시 원본 유지
+_EDGE_SCAN = 0.25        # 가장자리 25% 구간에서 글씨 밴드 탐색
 
 _PROMPT = """\
-이 이미지는 한국 쿠팡 상세페이지 후보다. 아래 action 중 하나로 분류하고 순수 JSON만 출력해라(설명/코드펜스 금지).
+이 이미지는 한국 쿠팡 상세페이지 후보다. "keep" 또는 "drop" 으로만 분류하고 순수 JSON만 출력해라(설명/코드펜스 금지).
 
-먼저 판단 규칙 (위에서부터 순서대로 확인하고, 처음 맞는 것으로 결정):
-- (1) ★최우선★ 광고 포스터는 제품이 크게 보여도 무조건 "drop" 한다.
-      아래 중 하나라도 해당하면 제품이 잘 보여도 살리지 말고 버려라:
-        · 배경 전체가 빨강/진남색/검정/금색 등 진한 색으로 꽉 차 있다
-        · 금색/갈색 액자나 장식 테두리(사진을 액자처럼 감싼 프레임)가 있다
-        · 큰 중국어 슬로건 제목(4자 이상, 예: 深层按摩捶, 经络拍痧板, 多种按摩体验)이 배경을 덮는다
-        · 여러 칸(2분할·4분할)에 각각 중국어 설명이 붙은 홍보 콜라주
-        · 판매자 홍보/과장광고/타사 브랜드/중국어 인증서·성적서/회사명 표기
-      => "drop"  (이런 이미지는 글자를 지우려 하지 마라. 지우면 지저분해진다.)
-- (2) 글자가 전혀 없는 깨끗한 제품 사진(흰색·연한 단색 배경의 제품컷)은 "keep". (가장 선호)
-- (3) 이미지에 사람(모델)이 크게 나오면 => 자르지 말 것. 단, remove 하기 전에 (1)을 반드시 다시 확인:
-      ★ 배경이 빨강/진남색/검정 등 진한 색이거나, 액자 테두리가 있거나, 큰 광고 슬로건이 있으면
-        => 사람이 있어도 "remove" 가 아니라 "drop" (이건 광고 포스터다. 지우지 말고 버려라)
-      * 배경이 흰색·연한 단색이고 글자가 있으면 => "remove"
-      * 배경이 복잡/진한색인데 (1)에 딱 안 맞고 못 버리겠으면 => "keep" (글자 남김)
-      * 글자가 전혀 없으면 => "keep"
-- (4) 사람이 없고 (1)의 광고 포스터도 아니면, 배경과 글자 위치로 정한다:
-      * 글자가 거의 없는 깨끗한 제품 사진            => "keep"
-      * 배경이 흰색·연한 단색 + 글자가 '위쪽 가장자리 띠'에만  => "crop_top"
-      * 배경이 흰색·연한 단색 + 글자가 '아래쪽 가장자리 띠'에만 => "crop_bottom"
-      * 배경이 흰색·연한 단색 + 글자가 '위·아래 띠' 양쪽에     => "crop_both"
-      * 배경이 흰색·연한 단색 + 글자가 제품 위에 겹침          => "remove"
+"drop" (아래 중 하나라도 해당하면 버림):
+- 광고 포스터: 배경이 빨강/진남색/검정/금색 등으로 꽉 차거나, 금색/장식 액자 테두리가 있거나,
+  큰 중국어 슬로건 제목이 배경을 덮는 홍보 이미지, 2~4분할 홍보 콜라주
+- 판매자 홍보/과장광고: 源头工厂, 现货速发, 品质保障, 支持定制, 판매량, TOP1 등
+- 타사 브랜드 로고/워터마크가 크게 있는 이미지
+- 중국어 인증서/검사보고서/성적서 표, 회사명 표기 이미지
+- 제품 없이 글자만 가득한 텍스트 배너
 
-핵심 원칙: 배경이 흰색·연한 단색일 때만 remove/crop 로 깨끗해진다.
-배경이 진하거나 화려하거나 액자가 있으면 => remove 하지 말고, 광고면 "drop", 아니면 "keep".
-확신이 안 서면 remove 대신 keep(글자 남김) 을 택해라. 뿌옇게 번지는 것보다 낫다.
-remove 로 지울 대상: 흰/연한 배경 위의 중국어 문구, '02' 같은 페이지 번호 등. (제품 음각 로고는 제외)
+"keep":
+- 위 drop 에 해당하지 않는 깨끗한 제품 사진 또는 사용장면 사진(글자 조금 있어도 광고 아니면 keep)
 
-drop 세부 기준(정보처럼 보여도 아래면 무조건 drop):
-  판매자 홍보(源头工厂,现货速发,品质保障,支持定制,OEM/ODM), 판매실적/과장(판매량,回头客,TOP1,100万,官方供应商),
-  보증문구(N년 免费换新), 타사 브랜드(WOSWEIR,UMAY,SPG,adidas 등), 중국어 검사보고서/인증서 표(检测报告,判定要求,GB 6675 등),
-  중국어 슬로건이 대부분을 덮는 순수 광고 포스터.
 주의: 제품에 음각된 자체 로고는 브랜드 문제 아님.
 
-박스 좌표는 [ymin,xmin,ymax,xmax] 형식이며 0~1000 으로 정규화한다(이미지 좌상단 0, 우하단 1000).
-- crop_* 인 경우: 잘라낼 글자 띠의 세로 범위를 boxes 에 넣어라(위 띠, 아래 띠 각각).
-- remove 인 경우: 지울 글자 영역들을 boxes 에 넣어라(여러 개 가능).
-- keep / drop 인 경우: boxes 는 [] 로 둔다.
-
-JSON 형식(정확히 이 키만):
-{"action":"keep","reason":"짧은이유","boxes":[[ymin,xmin,ymax,xmax]]}
+JSON: {"action":"keep","reason":"짧은이유"}
 """
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
+
+def _row_activity(gray):
+    """각 가로줄의 밝기 변화량(글씨/복잡한 영역일수록 큼)."""
+    return np.abs(np.diff(gray.astype(int), axis=1)).sum(axis=1)
 
 
-# ── 유틸 ──────────────────────────────────────────────────────────────────
+def _is_ad(gray):
+    """이미지 전체에 글씨가 퍼진 광고/홍보 콜라주인지 판정."""
+    h = gray.shape[0]
+    act = _row_activity(gray)
+    thr = np.median(act) * 1.8
+    busy_ratio = (act > thr).sum() / h
+    return busy_ratio >= AD_BUSY_RATIO, busy_ratio
+
+
+def _find_crop(gray):
+    """위/아래 가장자리의 글씨 밴드를 찾아 잘라낼 (top, bottom) 반환.
+    보수적: 글씨가 뚜렷할 때만 자르고, 글씨 덩어리가 여러 개면(짧은 여백으로 끊겨도)
+    이어서 포함한다. 30% 초과로 잘라야 하면 그쪽은 자르지 않는다(제품 보호)."""
+    h = gray.shape[0]
+    act = _row_activity(gray)
+    base = np.median(act[int(h * 0.35):int(h * 0.65)])  # 제품(중앙) 기준선
+    strong = base * 2.5          # '확실한 글씨' 임계 (보수적으로 높임)
+    quiet = base * 1.3           # 이 아래면 '여백'
+    gap_limit = int(h * 0.06)    # 여백이 이보다 길게 이어지면 글씨 끝으로 확정
+
+    # --- 아래쪽: 밑에서 위로 올라가며 글씨 밴드 추적 ---
+    bottom = h
+    scan_start = int(h * (1 - _EDGE_SCAN))
+    found = False
+    gap = 0
+    y = h - 1
+    while y >= scan_start:
+        if act[y] > strong:
+            found = True
+            bottom = y
+            gap = 0
+        elif found:
+            if act[y] < quiet:
+                gap += 1
+                if gap >= gap_limit:
+                    break        # 충분히 긴 여백 -> 글씨 끝
+            else:
+                gap = 0          # 애매한 구간(소제목 등)은 계속 이어감
+                bottom = y
+        y -= 1
+    if found:
+        bottom = max(0, bottom - 4)
+    if (h - bottom) > h * MAX_CROP_RATIO:   # 너무 많이 잘려야 하면 포기(제품 보호)
+        bottom = h
+
+    # --- 위쪽: 위에서 아래로 내려가며 글씨 밴드 추적 ---
+    top = 0
+    scan_end = int(h * _EDGE_SCAN)
+    found = False
+    gap = 0
+    y = 0
+    while y < scan_end:
+        if act[y] > strong:
+            found = True
+            top = y
+            gap = 0
+        elif found:
+            if act[y] < quiet:
+                gap += 1
+                if gap >= gap_limit:
+                    break
+            else:
+                gap = 0
+                top = y
+        y += 1
+    if found:
+        top = min(h, top + 4)
+    if top > h * MAX_CROP_RATIO:
+        top = 0
+
+    return top, bottom
+
+
+def _score_gray(gray):
+    """흑백 배열의 깨끗함 점수(낮을수록 깨끗)."""
+    h = gray.shape[0]
+    if h < 10:
+        return 999.0
+    act = _row_activity(gray)
+    med = np.median(act)
+    if med <= 0:
+        med = 1.0
+    busy = (act > med * 1.8).sum() / h
+    edge = int(h * 0.2)
+    strong = med * 2.5
+    hits = (act[:edge] > strong).sum() + (act[-edge:] > strong).sum()
+    return float(busy + (hits / max(1, edge * 2)) * 0.5)
+
+
+def _try_smart_crop(path):
+    """위/아래 글씨 밴드를 잘라보고, 점수가 확실히 좋아질 때만 저장한다.
+    애매하거나 많이 잘라야 하면 원본을 그대로 둔다(제품 훼손 방지).
+    반환: True면 크롭 저장됨."""
+    if np is None:
+        return False
+    try:
+        img = Image.open(path)
+        gray = np.array(img.convert("L"))
+    except Exception:
+        return False
+    h, w = gray.shape
+    before = _score_gray(gray)
+    if before <= 0.02:          # 이미 충분히 깨끗하면 건드리지 않음
+        return False
+
+    act = _row_activity(gray)
+    base = np.median(act[int(h * 0.35):int(h * 0.65)])
+    if base <= 0:
+        return False
+    strong = base * 2.0
+    limit = int(h * MAX_CROP_RATIO)
+
+    # 위쪽: 글씨가 끝나고 조용해지는 지점 찾기
+    top = 0
+    for y in range(0, limit):
+        if act[y] > strong:
+            top = y
+    if top > 0:
+        # 글씨 아래 여백까지 조금 더 내려감
+        y = top
+        while y < limit and act[y] > base * 1.2:
+            y += 1
+        top = min(y + 3, limit)
+
+    # 아래쪽
+    bottom = h
+    for y in range(h - 1, h - limit, -1):
+        if act[y] > strong:
+            bottom = y
+    if bottom < h:
+        y = bottom
+        while y > h - limit and act[y] > base * 1.2:
+            y -= 1
+        bottom = max(y - 3, h - limit)
+
+    if top == 0 and bottom == h:
+        return False
+    if (bottom - top) < h * 0.5:      # 절반 이상 남아야 함
+        return False
+
+    cropped = gray[top:bottom, :]
+    after = _score_gray(cropped)
+    # 점수가 확실히 좋아진 경우에만 채택(30% 이상 개선)
+    if after < before * 0.7:
+        try:
+            Image.open(path).crop((0, top, w, bottom)).save(path, quality=95)
+            return True
+        except Exception:
+            return False
+    return False
+
+
+def _text_band_score(gray):
+    """가로 '글씨 띠'가 차지하는 비율을 측정.
+    핵심: 글씨 줄은 한 줄 안에서 밝음<->어두움 전환이 여러 번 반복된다(획 때문).
+    털/니트 질감도 전환이 많지만 '밝은 배경(>=200)'과 '진한 획(<=90)' 사이의
+    극단적 전환은 드물다. 두 조건을 함께 쓰면 질감에 속지 않고 글씨만 잡힌다."""
+    h, w = gray.shape
+    if h < 30 or w < 20:
+        return 0.0
+    g = gray.astype(int)
+
+    dark = (g <= 90)
+    light = (g >= 200)
+
+    # 각 줄에서 '밝음 -> 어두움' 전환 횟수(획 개수 근사)
+    # 밝은 픽셀 뒤에 어두운 픽셀이 오는 지점을 센다.
+    trans = (light[:, :-1] & dark[:, 1:]).sum(axis=1)
+
+    dark_r = dark.sum(axis=1) / float(w)
+    # 글씨 줄: 극단 전환이 충분히 많고(획 4개 이상), 어두운 비율은 과하지 않음
+    text_rows = (trans >= 4) & (dark_r < 0.45)
+
+    frac = float(text_rows.sum()) / h
+    return frac
+
+
+def _clean_score(path):
+    """이미지의 '깨끗함' 점수(낮을수록 글씨 없는 깨끗한 사진).
+    단순화 20260901: 실물로 검증된 '글씨 획 감지' 하나만 사용한다.
+    (모서리 로고/원색 지표는 오탐이 많아 제거)
+      실측: 깨끗한 사진 0.0000 / 글씨 있는 사진 0.07~0.11"""
+    if np is None:
+        return 999.0
+    try:
+        gray = np.array(Image.open(path).convert("L"))
+    except Exception:
+        return 999.0
+    if gray.shape[0] < 10:
+        return 999.0
+    return float(_text_band_score(gray))
+
+
+def _clean_score_old3(path):
+    """이미지의 '깨끗함' 점수. 낮을수록 글씨가 적은 깨끗한 제품컷.
+    글씨/텍스트가 많으면 가로줄 밝기 변화가 큰 줄이 많아진다."""
+    if np is None:
+        return 999.0
+    try:
+        gray = np.array(Image.open(path).convert("L"))
+    except Exception:
+        return 999.0
+    h = gray.shape[0]
+    if h < 10:
+        return 999.0
+    act = _row_activity(gray)
+    med = np.median(act)
+    if med <= 0:
+        med = 1.0
+    thr = med * 1.8
+    busy_ratio = (act > thr).sum() / h          # 복잡한 줄 비율
+    # 가장자리(위/아래 20%)에 글씨 밴드가 있으면 가산점(=나쁨)
+    edge = int(h * 0.2)
+    strong = med * 2.5
+    edge_hits = (act[:edge] > strong).sum() + (act[-edge:] > strong).sum()
+    edge_ratio = edge_hits / max(1, edge * 2)
+    return float(busy_ratio + edge_ratio * 0.5)
+
+
+def _process_image(path):
+    """이미지 한 장 처리. 반환: 'ad'(광고=삭제) 또는 'clean'(그대로 유지).
+    크롭은 제품이 잘리는 사고를 막기 위해 하지 않는다(20260828 옵션1).
+    글씨가 사방에 퍼진 명백한 광고만 삭제하고, 나머지는 원본 유지."""
+    if np is None:
+        return "clean"
+    try:
+        img = Image.open(path)
+        gray = np.array(img.convert("L"))
+    except Exception:
+        return "clean"
+    is_ad, _ = _is_ad(gray)
+    if is_ad:
+        return "ad"
+    return "clean"
+    return "clean"
+
+
 def _dhash(path, n=8):
     img = Image.open(path).convert("L").resize((n + 1, n))
     px = list(img.getdata()); w = n + 1; bits = 0; i = 0
@@ -98,96 +306,11 @@ def _list(folder):
     return sorted(out)
 
 
-def _box_to_px(box, width, height):
-    """[ymin,xmin,ymax,xmax] (0~1000) -> (x1,y1,x2,y2) 픽셀."""
-    ymin, xmin, ymax, xmax = box
-    x1 = max(0, int(xmin / 1000 * width))
-    y1 = max(0, int(ymin / 1000 * height))
-    x2 = min(width, int(xmax / 1000 * width))
-    y2 = min(height, int(ymax / 1000 * height))
-    return x1, y1, x2, y2
-
-
-def _crop_bands(path, boxes, action):
-    """위/아래 글자 띠를 잘라내고 저장(in-place). 성공 시 True."""
-    try:
-        pil = Image.open(path).convert("RGB")
-    except Exception:
-        return False
-    w, h = pil.size
-
-    top_cut = 0            # 위에서 잘라낼 y (여기까지 버림)
-    bottom_cut = h         # 아래에서 이 y부터 버림
-
-    for box in boxes or []:
-        if not box or len(box) != 4:
-            continue
-        x1, y1, x2, y2 = _box_to_px(box, w, h)
-        mid = (y1 + y2) / 2
-        if mid < h / 2:                       # 위쪽 띠
-            top_cut = max(top_cut, y2)
-        else:                                  # 아래쪽 띠
-            bottom_cut = min(bottom_cut, y1)
-
-    if action == "crop_top":
-        bottom_cut = h
-    elif action == "crop_bottom":
-        top_cut = 0
-    # crop_both 는 둘 다 사용
-
-    # 안전장치: 너무 많이 자르면(제품까지) 크롭 취소
-    if top_cut > h * MAX_CROP_RATIO:
-        top_cut = 0
-    if bottom_cut < h * (1 - MAX_CROP_RATIO):
-        bottom_cut = h
-
-    if top_cut <= 0 and bottom_cut >= h:
-        return False  # 자를 게 없음
-
-    if bottom_cut - top_cut < h * 0.3:
-        return False  # 남는 게 너무 적으면 크롭 포기
-
-    cropped = pil.crop((0, top_cut, w, bottom_cut))
-    cropped.save(path)
-    return True
-
-
-def _remove_text(path, boxes):
-    """글자 영역을 인페인팅으로 지우고 저장(in-place). 성공 시 True."""
-    try:
-        import numpy as np
-        import cv2
-    except Exception:
-        return False
-    try:
-        pil = Image.open(path).convert("RGB")
-    except Exception:
-        return False
-    bgr = np.array(pil)[:, :, ::-1].copy()
-    h, w = bgr.shape[:2]
-    mask = np.zeros((h, w), dtype=np.uint8)
-    for box in boxes or []:
-        if not box or len(box) != 4:
-            continue
-        x1, y1, x2, y2 = _box_to_px(box, w, h)
-        # 글자 테두리까지 확실히 덮도록 약간 여유
-        pad = max(2, int((y2 - y1) * 0.08))
-        y1 = max(0, y1 - pad); y2 = min(h, y2 + pad)
-        cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
-    if not mask.any():
-        return False
-    result = cv2.inpaint(bgr, mask, inpaintRadius=7, flags=cv2.INPAINT_TELEA)
-    Image.fromarray(result[:, :, ::-1]).save(path)
-    return True
-
-
-# ── 메인 ──────────────────────────────────────────────────────────────────
 def process_folder(folder, log=print):
-    """상세페이지 폴더 하나를 정리한다. 요약 dict 반환."""
     import google.generativeai as genai
     key = os.getenv("GEMINI_API_KEY")
     if not key:
-        log("    ⚠️ GEMINI_API_KEY 없음 — 상세이미지 정리 건너뜀")
+        log("    warn: GEMINI_API_KEY 없음 - 건너뜀")
         return {"skipped": True}
     genai.configure(api_key=key)
     model = genai.GenerativeModel(os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash"))
@@ -195,26 +318,20 @@ def process_folder(folder, log=print):
     if not os.path.isdir(folder):
         return {"skipped": True}
 
-    sub = {k: os.path.join(folder, v) for k, v in
-           {"drop": "_제외배너", "dup": "_중복", "over": "_초과보관", "orig": "_원본백업"}.items()}
-    for d in sub.values():
-        os.makedirs(d, exist_ok=True)
+    del_dir = os.path.join(folder, _DEL)
+    os.makedirs(del_dir, exist_ok=True)
 
-    # 재실행 복구: 하위 폴더의 detail_* 를 상위로 되돌림(원본백업 제외)
-    for kk, d in sub.items():
-        if kk == "orig":
-            continue
-        for f in glob.glob(os.path.join(d, "detail_*.*")):
-            try:
-                shutil.move(f, os.path.join(folder, os.path.basename(f)))
-            except Exception:
-                pass
+    for f in glob.glob(os.path.join(del_dir, "detail_*.*")):
+        try:
+            shutil.move(f, os.path.join(folder, os.path.basename(f)))
+        except Exception:
+            pass
 
     files = _list(folder)
     if not files:
         return {"skipped": True}
 
-    # 1) 중복 제거
+    # 중복 제거 (dhash 해밍거리 <= DUP_THRESHOLD 이면 같은 이미지로 보고 _삭제로 이동)
     kept, hashes, dup = [], [], 0
     for f in files:
         try:
@@ -223,18 +340,120 @@ def process_folder(folder, log=print):
             kept.append(f); continue
         if any(_ham(h, kh) <= DUP_THRESHOLD for kh in hashes):
             try:
-                shutil.move(f, os.path.join(sub["dup"], os.path.basename(f))); dup += 1
+                shutil.move(f, os.path.join(del_dir, os.path.basename(f))); dup += 1
             except Exception:
                 kept.append(f)
         else:
             hashes.append(h); kept.append(f)
 
-    # 2) 앞쪽 N장만 AI 분류
+    # ===== 깨끗한 이미지 상위 N장만 채택 20260829 =====
+    # 중복제거 → 각 이미지의 '깨끗함 점수' 측정(글씨 적을수록 낮음)
+    # → 점수 낮은 순으로 정렬 → 상위 MAX_USE 장만 남기고 나머지는 _삭제.
+    # 글씨 있는 이미지를 자르거나 번역하지 않고 애초에 안 쓰는 방식(제품 훼손 없음).
+    # 채택 장수는 .env 의 DETAIL_USE_COUNT 로 조절(기본 5).
+    _ai_on = str(os.getenv("DETAIL_AI_FILTER", "off")).lower() in ("on", "1", "true", "yes")
+    if not _ai_on:
+        try:
+            use_n = int(os.getenv("DETAIL_USE_COUNT", str(MAX_USE)))
+        except Exception:
+            use_n = MAX_USE
+        if use_n < 1:
+            use_n = 1
+
+        scored = []
+        n_crop = 0
+        # 크롭 비활성화 20260901: 인물 사진이 잘리는 사고가 있어 자르기는 하지 않는다.
+        # 글씨 있는 이미지는 자르지 말고 그냥 탈락시키고, 부족분은 대표이미지로 채운다.
+        for f in kept:
+            scored.append((_clean_score(f), f))
+        scored.sort(key=lambda x: x[0])          # 깨끗한 순(점수 낮은 순)
+
+        # '깨끗하다'고 인정할 점수 상한 (.env 의 DETAIL_CLEAN_MAX 로 조절)
+        try:
+            clean_max = float(os.getenv("DETAIL_CLEAN_MAX", "0.02"))
+        except Exception:
+            clean_max = 0.02
+
+        chosen = [f for s, f in scored[:use_n] if s <= clean_max]
+        chosen_set = set(chosen)
+        dropped = [f for _s, f in scored if f not in chosen_set]
+        n_drop = 0
+        for f in dropped:
+            try:
+                shutil.move(f, os.path.join(del_dir, os.path.basename(f))); n_drop += 1
+            except Exception:
+                pass
+
+        # 부족분은 대표이미지(스튜디오 변환본)에서 보충 20260831
+        # 상세이미지 중 깨끗한 것이 use_n 장에 못 미치면, 같은 상품의
+        # '대표이미지' 폴더에서 깨끗한 순으로 가져와 채운다.
+        n_fill = 0
+        if len(chosen) < use_n:
+            try:
+                prod_dir = os.path.dirname(os.path.abspath(folder))
+                main_dir = os.path.join(prod_dir, "대표이미지")
+                if os.path.isdir(main_dir):
+                    cands = []
+                    for ext in ("jpg", "jpeg", "png"):
+                        for p in glob.glob(os.path.join(main_dir, f"*.{ext}")):
+                            if os.path.dirname(p) == main_dir:
+                                cands.append(p)
+                    cands = sorted(set(cands))
+                    cands.sort(key=lambda p: _clean_score(p))
+                    need = use_n - len(chosen)
+                    # 이미 채택된 상세이미지의 해시(대표이미지와 겹치는지 확인용)
+                    detail_hashes = []
+                    for f in chosen:
+                        try:
+                            detail_hashes.append(_dhash(f))
+                        except Exception:
+                            pass
+                    used_hashes = list(detail_hashes)
+                    for src in cands:
+                        if need <= 0:
+                            break
+                        # 보충은 기준을 느슨하게(3배) 적용해 확실히 채운다.
+                        # 대표이미지는 스튜디오 변환본이라 대체로 깨끗하다.
+                        if _clean_score(src) > clean_max * 3:
+                            continue
+                        try:
+                            hh = _dhash(src)
+                            # 이미 채택된 '상세이미지'와 거의 같을 때만 건너뛴다.
+                            # 대표이미지끼리(색상만 다른 컷)는 중복으로 보지 않는다.
+                            if any(_ham(hh, uh) <= 3 for uh in detail_hashes):
+                                continue
+                        except Exception:
+                            hh = None
+                        dst = os.path.join(folder, f"__fill_{n_fill+1:03d}.jpg")
+                        try:
+                            shutil.copy(src, dst)
+                            chosen.append(dst)
+                            if hh is not None:
+                                used_hashes.append(hh)
+                            n_fill += 1; need -= 1
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        # 채택된 이미지들을 detail_001..N 으로 순서 정리(상세페이지 배치용)
+        try:
+            tmp = []
+            for i, f in enumerate(chosen, 1):
+                ext = os.path.splitext(f)[1].lower() or ".jpg"
+                t = os.path.join(folder, f"__tmp_{i:03d}{ext}")
+                shutil.move(f, t); tmp.append((i, t, ext))
+            for i, t, ext in tmp:
+                shutil.move(t, os.path.join(folder, f"detail_{i:03d}{ext}"))
+        except Exception:
+            pass
+
+        log(f"    상세이미지 정리: 채택 {len(chosen)}장 / 중복 {dup} / 크롭 {n_crop} / 제외 {n_drop} / 대표보충 {n_fill}")
+        return {"chosen": len(chosen), "dup": dup, "drop": n_drop, "crop": n_crop, "fill": n_fill}
+
     to_ai = kept[:AI_LIMIT]
     overflow = kept[AI_LIMIT:]
-    results = []   # (path, action, boxes)
-    report = []
-    n_drop = 0
+    keeps, report, n_drop = [], [], 0
 
     for f in to_ai:
         name = os.path.basename(f)
@@ -245,81 +464,36 @@ def process_folder(folder, log=print):
             raw = re.sub(r"^```json\s*|^```\s*|```$", "", (resp.text or "").strip(), flags=re.MULTILINE).strip()
             r = json.loads(raw)
         except Exception as e:
-            results.append((f, "keep", [])); report.append(f"[남김-오류] {name}: {e}"); continue
+            keeps.append(f); report.append(f"[남김-오류] {name}: {e}"); continue
 
         action = str(r.get("action", "keep")).lower()
         reason = r.get("reason", "")
-        boxes = r.get("boxes") or []
-        if action not in ("keep", "crop_top", "crop_bottom", "crop_both", "remove", "drop"):
-            action = "keep"
-
         if action == "drop":
             try:
-                shutil.move(f, os.path.join(sub["drop"], name)); n_drop += 1
+                shutil.move(f, os.path.join(del_dir, name)); n_drop += 1
             except Exception:
                 pass
-            report.append(f"[버림] {name}: {reason}")
+            report.append(f"[삭제] {name}: {reason}")
         else:
-            results.append((f, action, boxes))
-            report.append(f"[{action}] {name}: {reason}")
+            keeps.append(f)
+            report.append(f"[남김] {name}: {reason}")
 
-    # 3) 최대 5장 채택 — 우선순위: 깨끗한 제품컷(keep+글자없음) > 나머지
-    #    각 그룹 안에서는 원래 등장 순서를 유지한다(stable).
-    def _priority(t):
-        _path, _action, _boxes = t
-        if _action == "keep" and not _boxes:
-            return 0   # 글자 없는 깨끗한 이미지 최우선
-        if _action == "keep":
-            return 1   # keep 인데 글자 남긴 것(복잡배경)
-        return 2       # crop / remove 처리 대상
-    ordered = sorted(results, key=_priority)  # sorted 는 안정 정렬이라 그룹 내 순서 유지
-    chosen = ordered[:MAX_USE]
-    chosen_paths = {t[0] for t in chosen}
-
-    # 채택 안 된 것 + overflow → 초과보관
-    for f, _, _ in results:
-        if f not in chosen_paths and os.path.exists(f):
+    chosen = keeps[:MAX_USE]
+    chosen_set = set(chosen)
+    for f in keeps + overflow:
+        if f not in chosen_set and os.path.exists(f):
             try:
-                shutil.move(f, os.path.join(sub["over"], os.path.basename(f)))
+                shutil.move(f, os.path.join(del_dir, os.path.basename(f)))
             except Exception:
                 pass
-    for f in overflow:
-        if os.path.exists(f):
-            try:
-                shutil.move(f, os.path.join(sub["over"], os.path.basename(f)))
-            except Exception:
-                pass
-
-    # 4) 채택본에 크롭/삭제 적용 (원본은 _원본백업에 보관)
-    n_crop = n_removed = 0
-    for f, action, boxes in chosen:
-        if action in ("crop_top", "crop_bottom", "crop_both", "remove"):
-            try:
-                shutil.copy(f, os.path.join(sub["orig"], os.path.basename(f)))
-            except Exception:
-                pass
-        try:
-            if action in ("crop_top", "crop_bottom", "crop_both"):
-                if _crop_bands(f, boxes, action):
-                    n_crop += 1
-                elif boxes:
-                    # 크롭이 안전장치에 걸리면 글자 삭제로 대체
-                    if _remove_text(f, boxes):
-                        n_removed += 1
-            elif action == "remove":
-                if _remove_text(f, boxes):
-                    n_removed += 1
-        except Exception as e:
-            log(f"    ⚠️ 이미지 처리 실패 {os.path.basename(f)}: {e}")
 
     try:
         open(os.path.join(folder, "_판별결과.txt"), "w", encoding="utf-8").write("\n".join(report))
     except Exception:
         pass
 
-    log(f"    🖼️ 상세이미지 정리: 채택 {len(chosen)}장 "
-        f"(크롭 {n_crop} / 글자삭제 {n_removed}) / 중복 {dup} / 버림 {n_drop}")
-    return {"chosen": len(chosen), "crop": n_crop, "removed": n_removed, "dup": dup, "drop": n_drop}
+    log(f"    상세이미지 정리: 채택 {len(chosen)}장 / 중복 {dup} / 삭제 {n_drop}")
+    return {"chosen": len(chosen), "dup": dup, "drop": n_drop}
 
 
 def process_folders(folders, log=print):
@@ -327,4 +501,4 @@ def process_folders(folders, log=print):
         try:
             process_folder(f, log=log)
         except Exception as e:
-            log(f"    ⚠️ 상세이미지 정리 실패 ({f}): {e}")
+            log(f"    정리 실패 ({f}): {e}")

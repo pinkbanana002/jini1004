@@ -424,6 +424,21 @@ def run_stage1(config: dict, log, progress, should_stop):
                     price_krw = parse_price_robust(lines[i + 1])
                 if '가격 (¥' in line and i + 1 < len(lines):
                     price_cny = parse_price_robust(lines[i + 1])
+            # 위안화 보강 20260828:
+            # '가격 (¥, 위안)' 라벨 뒤가 비어 price_cny=0 이 되는 사이트 대응.
+            # 본문 전체에서 '¥숫자' 를 모두 찾아 그중 최소값(대량 도매 단가)을 사용.
+            if price_cny == 0.0:
+                found = re.findall(r'¥\s*([\d]+(?:\.\d+)?)', body_text)
+                vals = []
+                for f in found:
+                    try:
+                        v = float(f)
+                        if v > 0:
+                            vals.append(v)
+                    except Exception:
+                        pass
+                if vals:
+                    price_cny = min(vals)
             return title, price_krw, price_cny
 
         # collect_opts_from_dropdown() 함수 정리 20260512:
@@ -766,21 +781,9 @@ def run_stage1(config: dict, log, progress, should_stop):
                     _fd_eff_w = _fd_w if _fd_w > 0 else _fd_rw
                     _fd_ratio = (_fd_h / _fd_w) if (_fd_w > 0 and _fd_h > 0) else 0
                     _fd_ratio_s = f"{_fd_ratio:.2f}" if _fd_ratio else "N/A"
-                    # 본 분류와 동일한 로직으로 시뮬레이션 (20260509 비율 명시 분기 동기화)
+                    # 본 분류와 동일한 로직으로 시뮬레이션 (20260828 세로필터 해제 동기화)
                     if _fd_eff_w >= 600:
-                        if _fd_h <= 0:
-                            _fd_cat = "→제외(차원미상)"
-                        elif _fd_w == _fd_h:
-                            if _fd_w >= 1000:
-                                _fd_cat = "→DETAIL"
-                            else:
-                                _fd_cat = "→제외(정사각)"
-                        else:
-                            _fd_r = _fd_h / _fd_w
-                            if _fd_r >= 0.40:
-                                _fd_cat = "→DETAIL"
-                            else:
-                                _fd_cat = "→제외(과도한가로)"
+                        _fd_cat = "→DETAIL"
                     elif _fd_eff_w >= 500:
                         _fd_cat = "→MAIN"
                     elif _fd_eff_w == 62:
@@ -888,27 +891,10 @@ def run_stage1(config: dict, log, progress, should_stop):
                 w = nat_w if nat_w > 0 else img.size['width']
                 classification = "제외(기타)"
                 if nat_w >= 600:
-                    # 비율 명시 분기 20260509:
-                    # ratio = nat_h / nat_w 로 명시 계산하여 분류.
-                    # - 세로형 (ratio >= 1.05): DETAIL
-                    # - 가로형 (0.40 <= ratio < 1.05): DETAIL (납작한 띠 제외)
-                    # - 정사각 (ratio == 1.0): nat_w >= 1000 만 DETAIL 통과
-                    # - 너무 납작 (ratio < 0.40): 제외(과도한가로)
-                    if nat_h <= 0:
-                        classification = "제외(차원미상)"
-                    elif nat_w == nat_h:
-                        if nat_w >= 700:
-                            classification = "DETAIL"
-                            detail_imgs.append(use_src)
-                        else:
-                            classification = "제외(정사각)"
-                    else:
-                        ratio = nat_h / nat_w
-                        if ratio >= 0.40:
-                            classification = "DETAIL"
-                            detail_imgs.append(use_src)
-                        else:
-                            classification = "제외(과도한가로)"
+                    # 세로필터 해제 20260828: 600px 이상이면 비율 상관없이 DETAIL
+                    # (정사각/가로/세로 전부 상세로 받음 = 원래 상태로 복원)
+                    classification = "DETAIL"
+                    detail_imgs.append(use_src)
                 elif w >= 500:
                     classification = "MAIN"
                     main_imgs.append(use_src)
@@ -985,12 +971,56 @@ def run_stage1(config: dict, log, progress, should_stop):
                     pass
 
                 try:
-                    body_text = driver.find_element(
-                        By.CSS_SELECTOR, 'div.overflow-y-scroll'
-                    ).text
+                    # 셀러라이프 UI 변경 대응 20260828:
+                    # 본문 스크롤 영역 클래스가 overflow-y-scroll -> overflow-y-auto 로 바뀜.
+                    # 둘 다 시도하고, 텍스트가 더 많은 쪽(가격 라벨 포함)을 사용.
+                    body_text = ""
+                    for sel in ('div.overflow-y-auto', 'div.overflow-y-scroll'):
+                        try:
+                            for el in driver.find_elements(By.CSS_SELECTOR, sel):
+                                t = el.text or ""
+                                if '가격' in t and len(t) > len(body_text):
+                                    body_text = t
+                        except Exception:
+                            pass
+                    if not body_text:
+                        body_text = driver.find_element(By.TAG_NAME, 'body').text
                 except Exception:
                     body_text = driver.find_element(By.TAG_NAME, 'body').text
                 print(f"      🔍 [DEBUG] body_text 첫 300자: {body_text[:300]}")
+
+                # 원가(위안화) 정밀 추출 20260828:
+                # '구매수량별 가격' 표(grid grid-cols-2)의 첫 번째 단가 = 최소주문 기준가.
+                # 단가 span 은 빨간색 클래스(text-[#FF3511], font-semibold)로 표시됨.
+                # 이 값을 최우선으로 사용(price_cny_exact). 실패 시 기존 로직으로 fallback.
+                price_cny_exact = 0.0
+                try:
+                    price_cny_exact = driver.execute_script(r"""
+                        // '구매수량별 가격' 제목을 가진 span 을 찾는다
+                        var labels = Array.from(document.querySelectorAll('span'));
+                        var head = labels.find(function(s){
+                            return (s.textContent||'').indexOf('구매수량별') !== -1;
+                        });
+                        if(!head) return 0;
+                        // 제목의 부모(div.py-4) 안에서 빨간 단가 span 들을 찾는다
+                        var box = head.parentElement;
+                        if(!box) return 0;
+                        var prices = Array.from(box.querySelectorAll('span')).filter(function(s){
+                            var c = s.className || '';
+                            return c.indexOf('FF3511') !== -1;  // 빨간 단가 색상
+                        });
+                        for(var i=0;i<prices.length;i++){
+                            var m = (prices[i].textContent||'').match(/([\d]+(?:\.\d+)?)/);
+                            if(m){ var v = parseFloat(m[1]); if(v>0) return v; }
+                        }
+                        return 0;
+                    """) or 0.0
+                    price_cny_exact = float(price_cny_exact)
+                except Exception:
+                    price_cny_exact = 0.0
+                if price_cny_exact > 0:
+                    print(f"      💴 [원가추출] 최소주문 기준가 ¥{price_cny_exact}")
+
                 # 셀러라이프 UI 변경 대응 20260429 (3차):
                 # 가격 범위 형식 "₩A ~ ₩B" / "¥A ~ ¥B" → 첫 가격만 남김.
                 # 이유: parse_body_text 가 두 숫자를 join 하면서
@@ -1009,6 +1039,10 @@ def run_stage1(config: dict, log, progress, should_stop):
                 )
                 print(f"      🔍 [DEBUG] 가격범위 정제 후 body_text 첫 200자: {body_text[:200]}")
                 title, price_krw, price_cny = parse_body_text(body_text)
+                # 원가 정밀값 우선 적용 20260828:
+                # '구매수량별 가격' 표에서 뽑은 최소주문 기준가가 있으면 그것을 사용.
+                if price_cny_exact > 0:
+                    price_cny = price_cny_exact
                 print(f"    📌 상품명: {title[:40]}")
                 print(f"    💰 가격: ₩{price_krw:,.0f} / ¥{price_cny}")
                 _sub_t['3.body_text+가격파싱'] = time.perf_counter() - _t3
@@ -1148,10 +1182,66 @@ def run_stage1(config: dict, log, progress, should_stop):
         download_tasks = []
         det_dirs = []
 
+        # 색깔 한글->영어 부분 치환 20260828:
+        # 옵션명에 섞인 한글 색을 영어(외래어)로 통일. 부분 치환 방식.
+        # 긴 표현부터 먼저 치환해야 '짙은 회색'이 '짙은 그레이'로 깨지지 않음.
+        # (리스트 순서 = 치환 우선순위. 위에서 아래로 순서대로 적용)
+        _COLOR_MAP = [
+            # --- 2어절 이상(먼저) ---
+            ("짙은 회색", "다크그레이"), ("진한 회색", "다크그레이"), ("진회색", "다크그레이"),
+            ("연한 회색", "라이트그레이"), ("연회색", "라이트그레이"),
+            ("하늘색", "스카이블루"), ("남색", "네이비"),
+            ("레몬 옐로우", "레몬옐로우"),
+            # --- 기본 단색 ---
+            ("검은색", "블랙"), ("검정색", "블랙"), ("검정", "블랙"), ("까만색", "블랙"),
+            ("흰색", "화이트"), ("하얀색", "화이트"), ("하양", "화이트"),
+            ("빨간색", "레드"), ("빨강", "레드"), ("붉은색", "레드"),
+            ("파란색", "블루"), ("파랑", "블루"), ("푸른색", "블루"),
+            ("노란색", "옐로우"), ("노랑", "옐로우"),
+            ("초록색", "그린"), ("녹색", "그린"), ("초록", "그린"),
+            ("분홍색", "핑크"), ("분홍", "핑크"),
+            ("보라색", "퍼플"), ("보라", "퍼플"),
+            ("주황색", "오렌지"), ("주황", "오렌지"),
+            ("갈색", "브라운"),
+            ("회색", "그레이"),
+        ]
+
+        # 단일 사이즈 표현 통일 20260901: 여러 형태를 'ONE SIZE' 로 변환
+        _SIZE_MAP = [
+            "하나의 사이즈가 모두 맞습니다.", "하나의 사이즈가 모두 맞습니다",
+            "하나의 사이즈로 모두 맞습니다", "모든 사이즈에 맞습니다",
+            "모든 사이즈에 맞음", "하나의 사이즈", "프리 사이즈", "프리사이즈",
+            "균일 사이즈", "균일사이즈", "균码", "均码", "단일 사이즈", "단일사이즈",
+            "FREE SIZE", "Free Size", "free size", "FREE", "Free",
+        ]
+
+        def apply_size_map(name):
+            """단일 사이즈를 뜻하는 표현을 'ONE SIZE' 로 바꾼다."""
+            if not name:
+                return name
+            s = str(name).strip()
+            for kw in _SIZE_MAP:
+                if kw and kw in s:
+                    return "ONE SIZE"
+            return s
+
+        def apply_color_map(name):
+            """옵션명 안의 한글 색 단어만 영어로 부분 치환."""
+            if not name:
+                return name
+            out = str(name)
+            for ko, en in _COLOR_MAP:
+                if ko in out:
+                    out = out.replace(ko, en)
+            return out
+
         def purify_option_name(name):
             if not name: return ""
             pure = re.split(r'(재고|가격|\d+\s*개|元|위안|:)', str(name))[0].strip()
-            return re.sub(r'[\\/*?:"<>|]', "", pure).strip()
+            pure = re.sub(r'[\\/*?:"<>|]', "", pure).strip()
+            pure = apply_size_map(pure)    # 단일사이즈 -> ONE SIZE
+            pure = apply_color_map(pure)   # 색 한글->영어 변환
+            return pure
 
         def get_cached_translation(text):
             if not text: return ""
@@ -1431,15 +1521,12 @@ def run_stage1(config: dict, log, progress, should_stop):
                 token = token.replace(cn, ko)
             return token
 
-        def _cut20(s):
-            s = str(s).strip()
-            return s[:20].strip() if len(s) > 20 else s
-
         def translate_if_chinese(text):
             if not text:
                 return text
             if not re.search(r'[\u4e00-\u9fff]', str(text)):
-                return _cut20(text)
+                return text
+            # 1) \uc6d0\ubcf8\uc5d0\uc11c \uc22b\uc790+\ub2e8\uc704 \ud1a0\ud070 \ucd94\ucd9c (\ud55c\uad6d\uc5b4 \ub2e8\uc704\ub85c \uce58\ud658\ud55c \ud615\ud0dc\ub85c \ubcf4\uad00)
             raw_tokens = []
             for m in _unit_pattern.finditer(str(text)):
                 token = m.group()
@@ -1448,23 +1535,26 @@ def run_stage1(config: dict, log, progress, should_stop):
                     ko_token = _normalize_unit_token(token)
                     ko_unit = _normalize_unit_token(unit_m.group())
                     raw_tokens.append((ko_token, ko_unit))
+            # 2) \ubc88\uc5ed
             try:
                 time.sleep(0.2)
                 translated = translator_ai.translate(text)
             except Exception:
-                return _cut20(text)
+                return text
             if not translated:
-                return _cut20(text)
+                return text
             if not raw_tokens:
-                return _cut20(translated)
+                return translated
+            # 3) \ud55c\uad6d\uc5b4 \ub2e8\uc704 \ud0a4\uc6cc\ub4dc\uac00 \uacb0\uacfc\uc5d0 \uc0b4\uc544\uc788\ub294\uc9c0 \uac80\uc0ac (\ub300\uc18c\ubb38\uc790 \ubb34\uc2dc)
             translated_lower = translated.lower()
             missing = []
             for ko_token, ko_unit in raw_tokens:
                 if ko_unit.lower() not in translated_lower:
                     missing.append(ko_token)
+            # 4) \ub204\ub77d\ub41c \ud1a0\ud070\ub9cc \uacb0\uacfc \ub4a4\uc5d0 \uacf5\ubc31 \uad6c\ubd84\uc73c\ub85c \ucca8\ubd80
             if missing:
-                return _cut20(f"{translated} {' '.join(missing)}".strip())
-            return _cut20(translated)
+                return f"{translated} {' '.join(missing)}".strip()
+            return translated
 
         def analyze_seo_only(image_url, brand_name):
             if not model or not image_url: return None, None
@@ -1532,7 +1622,7 @@ def run_stage1(config: dict, log, progress, should_stop):
     "tags": "태그1,태그2,태그3,태그4,태그5,태그6,태그7,태그8,태그9,태그10"
 }}
 """
-                ai_res = model.generate_content([prompt, img_data])
+                ai_res = model.generate_content([prompt, img_data], request_options={"timeout": 20})
                 text = ai_res.text.strip()
                 # 코드펜스(```json ... ```) 제거
                 text = re.sub(r'^```(?:json)?\s*', '', text)
@@ -1651,10 +1741,16 @@ def run_stage1(config: dict, log, progress, should_stop):
                         unchanged_list.append(f"📍 {row_num}행: 상품명이 변경되지 않았거나 너무 짧음 ({ai_name})")
                     col_letter = openpyxl.utils.get_column_letter(idx_trans_name + 1)
                     updates.append({'range': f"{col_letter}{row_num}", 'values': [[ai_name]]})
-                    # 메인키워드 자동채움 20260816: 변환상품명(ai_name)에 '헬스' 있으면
-                    # '기타헬스소품', 없으면 변환상품명 그대로(검수는 수동). 1단계에서 바로 채움.
+                    # 메인키워드 자동채움 20260831:
+                    # 태그의 첫 번째 키워드를 메인키워드로 사용(브랜드명 없이).
+                    # 예) 태그 '당구장갑,세손가락장갑,...' -> 메인키워드 '당구장갑'
+                    # 태그가 비면 변환상품명에서 브랜드명을 뺀 값으로 대체.
                     if idx_main_kw != -1:
-                        _kw = '기타헬스소품' if '헬스' in ai_name else ai_name
+                        _kw = ''
+                        if ai_tags:
+                            _kw = str(ai_tags).split(',')[0].strip()
+                        if not _kw:
+                            _kw = str(ai_name).replace(MY_BRAND_NAME, '').strip()
                         col_letter = openpyxl.utils.get_column_letter(idx_main_kw + 1)
                         updates.append({'range': f"{col_letter}{row_num}", 'values': [[_kw]]})
                     if idx_tags != -1 and ai_tags:

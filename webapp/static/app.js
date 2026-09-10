@@ -413,7 +413,7 @@ async function resetWorkspace() {
         showToast("실행 중에는 초기화할 수 없습니다.", "warn");
         return;
     }
-    if (!confirm("작업 상태를 초기화하시겠습니까?\n(체크리스트·로그·진행바가 모두 리셋됩니다)")) return;
+    // 확인 팝업 없이 바로 초기화 20260829
     try {
         const res = await fetch("/api/reset", { method: "POST" });
         if (!res.ok) {
@@ -490,41 +490,15 @@ function showChecklistModal() {
     modal.innerHTML = `
         <div class="modal-box">
             <h2>✅ 1단계 완료!</h2>
-            <p class="modal-desc">2단계로 넘어가기 전에 아래 3가지를 꼭 확인해주세요.</p>
-
-            <label class="check-row">
-                <input type="checkbox" class="check-item" id="check1">
-                <span><strong>① 썸네일 수정</strong></span>
-            </label>
-            <label class="check-row">
-                <input type="checkbox" class="check-item" id="check2">
-                <span><strong>② 상세페이지 수정</strong></span>
-            </label>
-            <label class="check-row">
-                <input type="checkbox" class="check-item" id="check3">
-                <span><strong>③ 구글시트 확인</strong></span>
-            </label>
+            <p class="modal-desc">썸네일 · 상세페이지 · 구글시트를 확인한 뒤 아래 버튼을 누르면 2단계가 자동으로 시작됩니다.</p>
 
             <div class="modal-actions">
-                <button id="btn-checklist-later" class="btn-secondary">나중에 확인</button>
-                <button id="btn-checklist-proceed" class="btn-primary" disabled>2단계로 이동 →</button>
+                <button id="btn-checklist-proceed" class="btn-primary">✅ 확인했어요 · 2단계 시작 →</button>
             </div>
         </div>`;
     document.body.appendChild(modal);
 
-    const boxes = modal.querySelectorAll(".check-item");
     const proceed = document.getElementById("btn-checklist-proceed");
-    if ([...boxes].every((x) => x.checked)) { proceed.disabled=false; setTimeout(() => proceed.click(), 400); }
-    boxes.forEach((b) => b.addEventListener("change", () => {
-        const allChecked = [...boxes].every((x) => x.checked);
-        proceed.disabled = !allChecked;
-        // 3개 모두 체크되면 버튼 클릭 없이 자동으로 2단계로 진행
-        if (allChecked) { setTimeout(() => proceed.click(), 400); }
-    }));
-    document.getElementById("btn-checklist-later").addEventListener("click", () => {
-        state.checklistDismissed = true;
-        modal.remove();
-    });
     proceed.addEventListener("click", async () => {
         try {
             const res = await fetch("/api/stage1/checklist", {
@@ -539,6 +513,11 @@ function showChecklistModal() {
             modal.remove();
             // 자동으로 2단계 이동
             menuByKey.stage2.click();
+            // 화면이 그려진 뒤 2단계를 자동으로 시작 (사용자가 또 누르지 않아도 됨)
+            setTimeout(() => {
+                const startBtn = document.getElementById("btn-stage2-start");
+                if (startBtn && !state.stage2Running) startBtn.click();
+            }, 600);
         } catch (e) { showToast("체크리스트 저장 실패: " + e.message, "error"); }
     });
 }

@@ -16,7 +16,7 @@ git status
 
 echo.
 echo ===== commit =====
-git commit -m "Update rocket automation (last night work)" -m "Save recent local changes to GitHub backup"
+git commit -m "Update rocket automation (0829 work)" -m "stage1: detail filter off + cny price extract + color KO->EN; main_image_studio: text removal + timeout + parallel; app.js: popup simplified + auto stage2; 07_cell_9: type/model M1/yellow fill; detail_image_filter: dedup + ad remove"
 
 echo.
 echo ===== push =====
