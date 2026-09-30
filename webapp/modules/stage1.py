@@ -1388,7 +1388,7 @@ def run_stage1(config: dict, log, progress, should_stop):
                 else:
                     print("    (처리할 상세페이지 폴더를 못 찾았습니다)")
             # 대표이미지 스튜디오 배경 변환 (Gemini 이미지 모델)
-            main_mode = os.getenv("MAIN_IMAGE_STUDIO", "on")
+            main_mode = os.getenv("MAIN_IMAGE_STUDIO", "off")
             if str(main_mode).lower() not in ("none", "off", "0", "false"):
                 _main_targets = [d for d in det_dirs
                                  if os.path.isdir(os.path.join(os.path.dirname(d), "대표이미지"))]
@@ -1536,10 +1536,40 @@ def run_stage1(config: dict, log, progress, should_stop):
                     ko_unit = _normalize_unit_token(unit_m.group())
                     raw_tokens.append((ko_token, ko_unit))
             # 2) \ubc88\uc5ed
-            try:
-                time.sleep(0.2)
-                translated = translator_ai.translate(text)
-            except Exception:
+            # 번역: 제미나이(유료, 안정) 우선 → 실패 시 구글 무료 번역 백업
+            translated = None
+            # 1) 제미나이로 번역 시도
+            if model is not None:
+                try:
+                    _tp = (
+                        "다음 중국어 상품 옵션명을 자연스러운 한국어로 번역해줘. "
+                        "번역 결과만 한 줄로 출력하고 다른 설명은 절대 붙이지 마.\n\n"
+                        + str(text)
+                    )
+                    _r = model.generate_content(_tp, request_options={"timeout": 15})
+                    _out = (_r.text or "").strip()
+                    if _out:
+                        translated = _out.splitlines()[0].strip()
+                except Exception as _ge:
+                    translated = None
+            # 2) 제미나이 실패 시 구글 무료 번역 백업 (과다요청 대비 재시도)
+            if not translated:
+                for _attempt in range(3):
+                    try:
+                        time.sleep(0.5)
+                        translated = translator_ai.translate(text)
+                        break
+                    except Exception as _te:
+                        _msg = str(_te)
+                        if 'TooManyRequests' in _msg or 'too many requests' in _msg.lower():
+                            _wait = 3 * (_attempt + 1)
+                            print(f"      ⏳ (백업)구글번역 과다요청 → {_wait}초 대기 후 재시도 ({_attempt+1}/3)")
+                            time.sleep(_wait)
+                            continue
+                        else:
+                            break
+            if not translated:
+                print(f"      ⚠️ 번역 실패, 원본 유지: {str(text)[:20]}")
                 return text
             if not translated:
                 return text

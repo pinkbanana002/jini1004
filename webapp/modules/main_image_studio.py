@@ -105,6 +105,11 @@ def _erase_corner_marks(img, ratio=0.16, tol=14):
 
 def process_main_images(img_dir, log=print):
     """대표이미지 폴더 하나의 이미지들을 스튜디오 배경으로 변환(in-place, 원본은 _원본 백업)."""
+    # ===== 대표이미지 스튜디오 완전 비활성화 (원본 그대로 사용, 비용 0) =====
+    # 다시 켜려면 아래 두 줄을 지우세요.
+    log("    🎨 대표이미지 스튜디오: 꺼짐 (원본 그대로 사용)")
+    return {"skipped": True, "disabled": True}
+    # =====================================================================
     if not os.path.isdir(img_dir):
         return {"skipped": True}
     import google.generativeai as genai
