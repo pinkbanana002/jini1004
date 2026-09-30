@@ -283,39 +283,41 @@ if 'driver' in globals() and driver is not None:
                     time.sleep(0.3)
             except: pass
 
-            # 3. 법적 서류 N/A 클릭 (페이지에 있는 모든 N/A 라벨 자동 클릭)
+            # 3. 법적 서류 '해당없음' 클릭 (id의 -N 라디오 직접 클릭 = 콘솔 검증된 방식)
             try:
                 print("      👉 [3/4] 법적 서류 '해당없음' 항목 체크...")
-
-                # 페이지 끝까지 스크롤해서 모든 N/A가 DOM에 로드되도록
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(0.8)
+                time.sleep(0.6)
                 driver.execute_script("window.scrollTo(0, 0);")
                 time.sleep(0.3)
 
-                # 페이지의 모든 N/A 라벨 찾기 (대소문자/공백 변형 포함)
-                all_na = driver.find_elements(By.XPATH, "//label[contains(., 'N/A') or contains(., 'n/a') or contains(., '해당없음') or contains(., '해당 없음') or contains(., '해당사항없음')]")
-                print(f"      📋 '해당없음'/N/A 라벨 {len(all_na)}개 발견")
-
-                clicked_count = 0
-                for idx, na_label in enumerate(all_na):
-                    try:
-                        # 클릭하기 전에 라벨 위치로 스크롤 (가려진 요소도 클릭 가능하게)
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", na_label)
-                        time.sleep(0.2)
-                        driver.execute_script("arguments[0].click();", na_label)
-                        clicked_count += 1
-                        time.sleep(0.3)
-                    except Exception as ne:
-                        print(f"      ⚠️ N/A {idx+1}번째 클릭 실패: {type(ne).__name__}")
-
-                print(f"      ✅ N/A 총 {clicked_count}/{len(all_na)}개 클릭 완료")
-
-                # 클릭 후 페이지 맨 위로 복귀 (다음 단계 진행 위해)
+                # (핵심) id에 '-N'이 든 라디오 = '해당없음'. 이것을 직접 클릭해야 버튼이 활성화됨.
+                clicked_count = driver.execute_script("""
+                    var done = 0;
+                    // 1) id가 ...-N 인 라디오(해당없음) 전부 체크
+                    document.querySelectorAll("input[type=radio][id*='-N']").forEach(function(r){
+                        if (r.offsetParent !== null && !r.checked) {
+                            var lb = document.querySelector("label[for='" + r.id + "']");
+                            if (lb) { lb.click(); } else { r.click(); }
+                            done++;
+                        }
+                    });
+                    // 2) 혹시 라벨 텍스트가 '해당없음'/'N/A' 인 것도 보강 클릭
+                    document.querySelectorAll('label').forEach(function(lb){
+                        var t = (lb.textContent||'').trim();
+                        if ((t === '해당없음' || t === '해당 없음' || t === 'N/A' || t === '해당사항없음') && lb.offsetParent !== null) {
+                            var forId = lb.getAttribute('for');
+                            var chk = forId ? document.getElementById(forId) : null;
+                            if (!chk || !chk.checked) { lb.click(); done++; }
+                        }
+                    });
+                    return done;
+                """)
+                print(f"      ✅ '해당없음' 클릭 완료 ({clicked_count}개)")
                 driver.execute_script("window.scrollTo(0, 0);")
                 time.sleep(0.5)
             except Exception as e:
-                print(f"      ⚠️ N/A 처리 단계 오류: {e}")
+                print(f"      ⚠️ '해당없음' 처리 단계 오류: {e}")
 
             # 🚀 4. 로켓 설치 'No' 정밀 타격 클릭
             try:
@@ -379,8 +381,10 @@ if 'driver' in globals() and driver is not None:
             # -----------------------------------------------------
             is_validate_clicked = False
             try:
+                # ⚠️ '검증 진행상태 확인하기'(btn-info)가 아니라 '파일 검증하기'(btn-primary)를 눌러야 함
                 validate_btn = wait.until(EC.presence_of_element_located((By.XPATH,
-                    "//button[contains(., 'Validate') or contains(., '파일 검증') or contains(., '검증하기') or contains(., '검증')]")))
+                    "//button[contains(@class,'btn-primary') and (contains(., '파일 검증') or contains(., 'Validate')) and not(contains(., '진행상태'))]"
+                    " | //button[contains(., '파일 검증하기')]")))
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", validate_btn)
                 time.sleep(0.5)
                 # 버튼이 disabled면 최대 5초 기다렸다가(약관 반영 대기) 그래도 비활성이면 강제 활성화
