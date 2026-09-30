@@ -285,7 +285,7 @@ if 'driver' in globals() and driver is not None:
 
             # 3. 법적 서류 N/A 클릭 (페이지에 있는 모든 N/A 라벨 자동 클릭)
             try:
-                print("      👉 [3/4] 법적 서류 '해당없음' 항목 체크...")
+                print("      👉 [3/4] 법적 서류 N/A 항목 체크...")
 
                 # 페이지 끝까지 스크롤해서 모든 N/A가 DOM에 로드되도록
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -294,8 +294,8 @@ if 'driver' in globals() and driver is not None:
                 time.sleep(0.3)
 
                 # 페이지의 모든 N/A 라벨 찾기 (대소문자/공백 변형 포함)
-                all_na = driver.find_elements(By.XPATH, "//label[contains(., 'N/A') or contains(., 'n/a') or contains(., '해당없음') or contains(., '해당 없음') or contains(., '해당사항없음')]")
-                print(f"      📋 '해당없음'/N/A 라벨 {len(all_na)}개 발견")
+                all_na = driver.find_elements(By.XPATH, "//label[contains(., 'N/A') or contains(., 'n/a')]")
+                print(f"      📋 N/A 라벨 {len(all_na)}개 발견")
 
                 clicked_count = 0
                 for idx, na_label in enumerate(all_na):
@@ -334,71 +334,37 @@ if 'driver' in globals() and driver is not None:
                         driver.execute_script("arguments[0].click();", all_no_labels[-1])
                 except: pass
 
-            # 5. 하단 약관 동의 체크박스 (정확한 id로 확실히 체크)
+            # 5. 권장 소비자 가격 관련 특정 약관 동의
             try:
-                print("      👉 하단 약관 동의 체크박스 처리...")
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(0.5)
-                # 쿠팡 필수 약관 2개: msrpAgreement, labelContactAgreement
-                # + agreements-check-item 안의 다른 체크박스도 함께 (혹시 더 있으면)
-                agree_count = driver.execute_script("""
-                    var ids = ['msrpAgreement', 'labelContactAgreement'];
-                    var done = 0;
-                    // 1) 알려진 id 먼저 확실히 체크
-                    ids.forEach(function(id){
-                        var chk = document.getElementById(id);
-                        if (chk && chk.type === 'checkbox' && !chk.checked) {
-                            chk.checked = true;
-                            chk.dispatchEvent(new Event('click', { bubbles: true }));
-                            chk.dispatchEvent(new Event('change', { bubbles: true }));
-                            chk.dispatchEvent(new Event('input', { bubbles: true }));
-                            done++;
-                        } else if (chk && chk.checked) {
-                            done++;
-                        }
-                    });
-                    // 2) agreements-check-item 안의 체크 안 된 체크박스도 마저 체크
-                    document.querySelectorAll('.agreements-check-item input[type=checkbox]').forEach(function(chk){
-                        if (!chk.checked) {
-                            chk.checked = true;
-                            chk.dispatchEvent(new Event('click', { bubbles: true }));
-                            chk.dispatchEvent(new Event('change', { bubbles: true }));
-                            chk.dispatchEvent(new Event('input', { bubbles: true }));
-                            done++;
-                        }
-                    });
-                    return done;
-                """)
-                print(f"      ✅ 약관 동의 체크 완료 ({agree_count}개)")
-                time.sleep(1.5)
-            except Exception as e:
-                print(f"      ⚠️ 약관 동의 체크 오류: {e}")
+                retail_agree_xpath = "//input[@type='checkbox' and following-sibling::*[contains(., 'I hereby agree on Coupang')]] | //label[contains(., 'I hereby agree on Coupang')]"
+                retail_element = wait.until(EC.presence_of_element_located((By.XPATH, retail_agree_xpath)))
+                driver.execute_script("""
+                    var el = arguments[0];
+                    el.click();
+                    var chk = (el.tagName === 'INPUT') ? el : el.querySelector('input[type="checkbox"]');
+                    if (chk) {
+                        chk.checked = true;
+                        chk.dispatchEvent(new Event('change', { bubbles: true }));
+                        chk.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                """, retail_element)
+                print("      👉 권장 소비자 가격 약관 동의 체크 완료")
+                time.sleep(2) 
+            except Exception as e: pass
 
             # -----------------------------------------------------
             # [Step 3] 등록 버튼 클릭 및 팝업 처리 (스마트 대기 이식)
             # -----------------------------------------------------
             is_validate_clicked = False
             try:
-                validate_btn = wait.until(EC.presence_of_element_located((By.XPATH,
-                    "//button[contains(., 'Validate') or contains(., '파일 검증') or contains(., '검증하기') or contains(., '검증')]")))
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", validate_btn)
-                time.sleep(0.5)
-                # 버튼이 disabled면 최대 5초 기다렸다가(약관 반영 대기) 그래도 비활성이면 강제 활성화
-                for _w in range(10):
-                    if validate_btn.get_attribute("disabled"):
-                        time.sleep(0.5)
-                    else:
-                        break
-                if validate_btn.get_attribute("disabled"):
-                    driver.execute_script("arguments[0].removeAttribute('disabled');", validate_btn)
-                    print("      ⚠️ 검증 버튼이 비활성이라 강제로 활성화했습니다.")
+                validate_btn = wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(., 'Validate')]")))
                 driver.execute_script("arguments[0].click();", validate_btn)
-                print("      👉 [검증하기] 버튼 클릭 완료!")
+                print("      👉 [Validate] 버튼 클릭 완료!")
                 
                 print("    ⏳ [스마트 대기] 결과 팝업을 기다리는 중입니다... (완료 시 즉시 진행)")
                 try:
                     WebDriverWait(driver, 180).until(
-                        EC.visibility_of_element_located((By.XPATH, "//*[contains(text(), 'Quotation has been submitted') or contains(text(), '견적서가 제출') or contains(text(), '제출되었') or contains(text(), '등록되었') or contains(text(), '완료')]"))
+                        EC.visibility_of_element_located((By.XPATH, "//*[contains(text(), 'Quotation has been submitted')]"))
                     )
                     print("      🚀 결과 팝업 감지 완료! 대기를 종료하고 다음 단계로 진행합니다.")
                     time.sleep(1)
