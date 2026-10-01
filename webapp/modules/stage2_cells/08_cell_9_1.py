@@ -387,17 +387,61 @@ if 'driver' in globals() and driver is not None:
                     " | //button[contains(., '파일 검증하기')]")))
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", validate_btn)
                 time.sleep(0.5)
-                # 버튼이 disabled면 최대 5초 기다렸다가(약관 반영 대기) 그래도 비활성이면 강제 활성화
-                for _w in range(10):
+                # 약관 반영 대기: 버튼이 활성화(disabled 풀림)될 때까지 최대 15초 기다림
+                for _w in range(30):
                     if validate_btn.get_attribute("disabled"):
                         time.sleep(0.5)
                     else:
                         break
+                # 그래도 비활성이면: 해당없음 + 약관을 모두 다시 확실히 체크 후 재대기 (최대 2회 반복)
+                for _retry in range(2):
+                    if not validate_btn.get_attribute("disabled"):
+                        break
+                    print(f"      ⏳ 버튼 비활성 → 필수항목(해당없음+약관) 재체크 후 재대기... ({_retry+1}/2)")
+                    driver.execute_script("""
+                        // 해당없음(-N 라디오) 다시 체크
+                        document.querySelectorAll("input[type=radio][id*='-N']").forEach(function(r){
+                            if (r.offsetParent !== null && !r.checked) {
+                                var lb = document.querySelector("label[for='" + r.id + "']");
+                                if (lb) { lb.click(); } else { r.click(); }
+                            }
+                        });
+                        // 약관 다시 체크
+                        ['msrpAgreement','labelContactAgreement'].forEach(function(id){
+                            var c = document.getElementById(id);
+                            if (c && !c.checked) { c.click(); c.checked = true;
+                                c.dispatchEvent(new Event('change',{bubbles:true})); }
+                        });
+                        document.querySelectorAll('.agreements-check-item input[type=checkbox]').forEach(function(c){
+                            if(!c.checked){ c.click(); c.checked=true;
+                                c.dispatchEvent(new Event('change',{bubbles:true})); }
+                        });
+                    """)
+                    for _w in range(20):
+                        if validate_btn.get_attribute("disabled"):
+                            time.sleep(0.5)
+                        else:
+                            break
+                # ⚠️ 강제 활성화 안 함! (강제로 누르면 필수 미입력 상태로 헛제출되어 목록에 안 올라감)
+                # 버튼이 끝까지 비활성이면 = 필수 항목 미입력. 억지로 누르지 않고 명확히 알림.
                 if validate_btn.get_attribute("disabled"):
-                    driver.execute_script("arguments[0].removeAttribute('disabled');", validate_btn)
-                    print("      ⚠️ 검증 버튼이 비활성이라 강제로 활성화했습니다.")
-                driver.execute_script("arguments[0].click();", validate_btn)
-                print("      👉 [검증하기] 버튼 클릭 완료!")
+                    print("      ❌ [검증하기] 버튼이 끝까지 비활성입니다 = 필수 항목 미입력. 제출하지 않습니다.")
+                    print("         (해당없음/약관 중 안 눌린 게 있거나, 다른 필수 항목이 비었을 수 있음)")
+                    raise Exception("검증 버튼 비활성 - 필수 항목 미입력으로 제출 중단")
+
+                # 여기 도달 = 버튼이 정상 활성화됨. 안전하게 클릭.
+                clicked_ok = False
+                for _try in range(3):
+                    try:
+                        driver.execute_script("arguments[0].click();", validate_btn)
+                        clicked_ok = True
+                        break
+                    except Exception:
+                        time.sleep(1)
+                if clicked_ok:
+                    print("      👉 [검증하기] 버튼 클릭 완료! (버튼 정상 활성 상태에서 클릭)")
+                else:
+                    raise Exception("검증 버튼 클릭 실패 (3회 시도)")
                 
                 print("    ⏳ [스마트 대기] 결과 팝업을 기다리는 중입니다... (완료 시 즉시 진행)")
                 try:

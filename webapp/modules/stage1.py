@@ -621,6 +621,27 @@ def run_stage1(config: dict, log, progress, should_stop):
                             option_price = float(price_match.group(1))
                     except (ValueError, TypeError):
                         option_price = 0.0
+                    # 화면 밖 옵션은 el.text 가 비어 가격 0 → JS로 가격 span 직접 읽기(34개 옵션 대응)
+                    if option_price == 0.0:
+                        try:
+                            js_price = drv.execute_script(r"""
+                                var el = arguments[0];
+                                // innerText 전체에서 ¥ 가격
+                                var txt = el.innerText || el.textContent || '';
+                                var m = txt.match(/¥\s*([\d.]+)/);
+                                if (m) return parseFloat(m[1]);
+                                // font-bold 가격 span 직접
+                                var sp = el.querySelector('span.font-bold, span[class*="font-bold"]');
+                                if (sp) {
+                                    var m2 = (sp.textContent||'').match(/([\d.]+)/);
+                                    if (m2) return parseFloat(m2[1]);
+                                }
+                                return 0;
+                            """, el) or 0.0
+                            if js_price and float(js_price) > 0:
+                                option_price = float(js_price)
+                        except Exception:
+                            pass
                     # 셀러라이프 UI 변경 대응 20260505: 옵션명 추출 우선순위
                     #   1) <img alt="..."> — 신규 UI에서 가장 안정적
                     #   2) div.min-w-0 div.font-medium — 신규 UI fallback
@@ -1243,6 +1264,24 @@ def run_stage1(config: dict, log, progress, should_stop):
             pure = apply_color_map(pure)   # 색 한글->영어 변환
             return pure
 
+        def make_safe_filename(name, max_len=80):
+            """이미지 파일명 안전화: 윈도우 금지문자 제거 + 길이 제한.
+            쿠팡 반려 방지(견적서 이름 = 실제 저장 파일명 일치)의 핵심."""
+            if not name:
+                return "img"
+            s = str(name)
+            # 윈도우 파일명 금지문자 9종 제거
+            s = re.sub(r'[\\/:*?"<>|]', "", s)
+            # 줄바꿈/탭 -> 공백, 연속 공백 1개로
+            s = re.sub(r'[\r\n\t]+', " ", s)
+            s = re.sub(r'\s+', " ", s).strip()
+            # 끝에 점/공백 제거 (윈도우가 싫어함)
+            s = s.rstrip(". ")
+            # 너무 길면 자르기
+            if len(s) > max_len:
+                s = s[:max_len].rstrip(". ")
+            return s if s else "img"
+
         def get_cached_translation(text):
             if not text: return ""
             if not ko_to_zh: return text
@@ -1323,8 +1362,8 @@ def run_stage1(config: dict, log, progress, should_stop):
                         final_ko1 = clean_n2 if is_switched else clean_n1
                         final_ko2 = clean_n1 if is_switched else clean_n2
                         china_opt_name = get_cached_translation(final_ko1)
-                        final_price = o2['price'] if o2['price'] > 0 else (o1['price'] if o1['price'] > 0 else item.get('base_price', 0))
-                        temp_fname = f"TEMP_{final_ko1}.jpg"
+                        final_price = o2['price'] if o2['price'] > 0 else (o1['price'] if o1['price'] > 0 else item.get('price_cny', 0))  # base_price(없는키)→price_cny 수정(1688 0원 방지)
+                        temp_fname = f"TEMP_{make_safe_filename(final_ko1)}.jpg"  # 금지문자 제거(반려 방지)
                         target_img_path = os.path.join(img_dir, temp_fname)
                         if main_opt_img:
                             task_info = f"[{prod_name}] 옵션: {final_ko1}"
@@ -1388,7 +1427,7 @@ def run_stage1(config: dict, log, progress, should_stop):
                 else:
                     print("    (처리할 상세페이지 폴더를 못 찾았습니다)")
             # 대표이미지 스튜디오 배경 변환 (Gemini 이미지 모델)
-            main_mode = os.getenv("MAIN_IMAGE_STUDIO", "off")
+            main_mode = os.getenv("MAIN_IMAGE_STUDIO", "on")
             if str(main_mode).lower() not in ("none", "off", "0", "false"):
                 _main_targets = [d for d in det_dirs
                                  if os.path.isdir(os.path.join(os.path.dirname(d), "대표이미지"))]
@@ -1536,40 +1575,10 @@ def run_stage1(config: dict, log, progress, should_stop):
                     ko_unit = _normalize_unit_token(unit_m.group())
                     raw_tokens.append((ko_token, ko_unit))
             # 2) \ubc88\uc5ed
-            # 번역: 제미나이(유료, 안정) 우선 → 실패 시 구글 무료 번역 백업
-            translated = None
-            # 1) 제미나이로 번역 시도
-            if model is not None:
-                try:
-                    _tp = (
-                        "다음 중국어 상품 옵션명을 자연스러운 한국어로 번역해줘. "
-                        "번역 결과만 한 줄로 출력하고 다른 설명은 절대 붙이지 마.\n\n"
-                        + str(text)
-                    )
-                    _r = model.generate_content(_tp, request_options={"timeout": 15})
-                    _out = (_r.text or "").strip()
-                    if _out:
-                        translated = _out.splitlines()[0].strip()
-                except Exception as _ge:
-                    translated = None
-            # 2) 제미나이 실패 시 구글 무료 번역 백업 (과다요청 대비 재시도)
-            if not translated:
-                for _attempt in range(3):
-                    try:
-                        time.sleep(0.5)
-                        translated = translator_ai.translate(text)
-                        break
-                    except Exception as _te:
-                        _msg = str(_te)
-                        if 'TooManyRequests' in _msg or 'too many requests' in _msg.lower():
-                            _wait = 3 * (_attempt + 1)
-                            print(f"      ⏳ (백업)구글번역 과다요청 → {_wait}초 대기 후 재시도 ({_attempt+1}/3)")
-                            time.sleep(_wait)
-                            continue
-                        else:
-                            break
-            if not translated:
-                print(f"      ⚠️ 번역 실패, 원본 유지: {str(text)[:20]}")
+            try:
+                time.sleep(0.2)
+                translated = translator_ai.translate(text)
+            except Exception:
                 return text
             if not translated:
                 return text
