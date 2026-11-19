@@ -65,6 +65,7 @@ FIXED_VALUES = {
     "FIXED_HANGER": "N",
     "FIXED_DIMENSION": "상세페이지참조",
     "FIXED_YEAR": 2025,
+    "FIXED_MFG_DATE": 2026,  # 제조연월 (20261006)
     "FIXED_SEASON": "사계절",
     "FIXED_MARK": "barcode.png",
     "FIXED_ORIGIN": "Made in China",
@@ -119,6 +120,7 @@ MAPPING_CONFIG = {
     "SKU": "FIXED_SKU_COUNT", "행어": "FIXED_HANGER", "포장무게": "CALC_WEIGHT",
     "단품포장": "포장사이즈", "크기": "무게", "중량": "CALC_WEIGHT_KG", "소재": "재질", "재질": "재질", "치수": "FIXED_DIMENSION",
     "출시": "FIXED_YEAR", "계절": "FIXED_SEASON",
+    "제조연월": "FIXED_MFG_DATE", "제조년월": "FIXED_MFG_DATE",
     "취급": "FIXED_WASH", "주의": "FIXED_WASH",
     "보증": "FIXED_WARRANTY", "AS": "FIXED_PHONE",
     "사유": "FIXED_NA", "취급주의": "FIXED_NA",

@@ -443,24 +443,66 @@ if 'driver' in globals() and driver is not None:
                 else:
                     raise Exception("검증 버튼 클릭 실패 (3회 시도)")
                 
-                print("    ⏳ [스마트 대기] 결과 팝업을 기다리는 중입니다... (완료 시 즉시 진행)")
-                try:
-                    WebDriverWait(driver, 180).until(
-                        EC.visibility_of_element_located((By.XPATH, "//*[contains(text(), 'Quotation has been submitted') or contains(text(), '견적서가 제출') or contains(text(), '제출되었') or contains(text(), '등록되었') or contains(text(), '완료')]"))
-                    )
-                    print("      🚀 결과 팝업 감지 완료! 대기를 종료하고 다음 단계로 진행합니다.")
+                print("    ⏳ [스마트 대기] 결과 팝업을 기다리는 중입니다... (최대 180초)")
+                # ⚠️ 이전 방식은 화면 아무데나 있는 '완료' 글자에도 반응해서 가짜 성공이 났음.
+                #    이제는 '실제로 열린 팝업창' 안의 글자만 읽어서 판단함.
+                popup_text = ""
+                ok_words = ['Quotation has been submitted', '견적서가 제출', '제출되었', '등록되었', '접수되었', 'submitted']
+                for _p in range(180):
+                    # (1) 브라우저 기본 알림창(alert)
+                    try:
+                        al = driver.switch_to.alert
+                        popup_text = al.text or ""
+                        print(f"      📢 알림창 내용: {popup_text}")
+                        al.accept()
+                        break
+                    except Exception:
+                        pass
+                    # (2) 화면에 실제로 열린 팝업(모달)
+                    popup_text = driver.execute_script("""
+                        var sel = ".modal.show, .modal.in, [role=dialog], .swal2-popup, .sweet-alert";
+                        var list = Array.from(document.querySelectorAll(sel)).filter(function(m){
+                            return m.offsetParent !== null || getComputedStyle(m).display !== 'none';
+                        });
+                        for (var i=0;i<list.length;i++){
+                            var t = (list[i].innerText||'').trim();
+                            if (t) return t;
+                        }
+                        return '';
+                    """) or ""
+                    if popup_text:
+                        break
                     time.sleep(1)
-                except:
-                    print("      ⚠️ 180초 초과: 팝업을 감지하지 못했습니다. (오류 가능성 있음)")
 
-                try:
-                    close_btn = driver.find_element(By.XPATH, "//button[contains(., '닫기') or contains(., '확인') or contains(., 'Close')]")
-                    driver.execute_script("arguments[0].click();", close_btn)
-                    print("      👉 [6] 결과 팝업 '닫기' 버튼 클릭 완료")
-                    time.sleep(5)
-                    is_validate_clicked = True
-                except:
-                    print("      ⚠️ 팝업 '닫기' 버튼을 찾지 못했습니다.")
+                if not popup_text:
+                    print("      ⚠️ 180초 동안 팝업이 안 떴습니다. 제출 안 된 것으로 처리합니다.")
+                else:
+                    short = popup_text.replace("\n", " / ")[:200]
+                    print(f"      📢 팝업 내용: {short}")
+                    if any(w in popup_text for w in ok_words):
+                        print("      🚀 제출 성공 팝업 확인!")
+                        is_validate_clicked = True
+                    else:
+                        print("      ❌ 성공 팝업이 아닙니다. (위 팝업 내용 확인 필요) 폴더 이동 안 함.")
+
+                    # 팝업 '안에 있는' 닫기/확인 버튼만 누름 (화면의 다른 '확인하기' 버튼 오클릭 방지)
+                    closed = driver.execute_script("""
+                        var sel = ".modal.show, .modal.in, [role=dialog], .swal2-popup, .sweet-alert";
+                        var list = Array.from(document.querySelectorAll(sel));
+                        for (var i=0;i<list.length;i++){
+                            var btns = list[i].querySelectorAll('button');
+                            for (var j=0;j<btns.length;j++){
+                                var t = (btns[j].innerText||'').trim();
+                                if (t==='닫기' || t==='확인' || t==='Close' || t==='OK') { btns[j].click(); return true; }
+                            }
+                        }
+                        return false;
+                    """)
+                    if closed:
+                        print("      👉 [6] 팝업 '닫기' 클릭 완료")
+                        time.sleep(5)
+                    else:
+                        print("      ⚠️ 팝업 안에서 닫기 버튼을 못 찾았습니다.")
 
             except Exception as e:
                 print(f"      ❌ 등록 버튼 처리 오류: {e}")

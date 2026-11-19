@@ -73,6 +73,35 @@ try:
     print(f"    🔎 업데이트 대상 열: {col_idx_img}열(대표), {col_idx_copy}열(COPY)")
     print("    🔄 [동기화] 변경된 폴더명을 계산하고 라벨을 생성합니다...")
     
+    def _norm(t):
+        # 비교용: 금지문자/공백/쉼표/점 모두 제거
+        return re.sub(r'[\\/*?:"<>|\s,.\-_()\[\]]', "", str(t))
+
+    def _find_product_folder(clean_name, img_path_in_sheet):
+        # (1) 시트의 '대표이미지경로'에 적힌 실제 폴더
+        try:
+            p = str(img_path_in_sheet).strip()
+            if p:
+                if os.path.basename(p.rstrip("\\/")) == "대표이미지":
+                    p = os.path.dirname(p.rstrip("\\/"))
+                if os.path.isdir(os.path.join(p, "대표이미지")):
+                    return p
+        except Exception:
+            pass
+        # (2) 이름을 느슨하게 비교해서 찾기 (공백/특수문자 무시)
+        target = _norm(clean_name)
+        if not target:
+            return None
+        try:
+            for d in os.listdir(current_dir):
+                full = os.path.join(current_dir, d)
+                if os.path.isdir(os.path.join(full, "대표이미지")) and _norm(d) == target:
+                    return full
+        except Exception:
+            pass
+        return None
+
+    skipped_names = []
     updated_count = 0
     label_count = 0
     processed_folders = set()
@@ -102,7 +131,19 @@ try:
                 new_copy_folder = os.path.join(new_rep_folder, "copy")
                 
                 # 3. [검증] 폴더 존재 여부 확인
-                if os.path.exists(new_rep_folder):
+                # ⭐ 폴더를 못 찾으면 다른 방법으로 한 번 더 찾기 (20261002)
+                if not os.path.exists(new_rep_folder):
+                    found = _find_product_folder(clean_prod_name, curr_img_path)
+                    if found:
+                        print(f"    🔁 폴더 이름이 달라서 다른 방법으로 찾음: {os.path.basename(found)}")
+                        new_product_folder = found
+                        new_rep_folder = os.path.join(found, "대표이미지")
+                        new_copy_folder = os.path.join(new_rep_folder, "copy")
+                if not os.path.exists(new_rep_folder):
+                    if clean_prod_name not in skipped_names:
+                        skipped_names.append(clean_prod_name)
+                        print(f"    ⚠️ 라벨 건너뜀 (폴더 없음): {clean_prod_name}")
+                elif os.path.exists(new_rep_folder):
                     final_img_path = new_rep_folder
                     
                     if str(row.get('옵션2', '')).strip():
@@ -175,8 +216,7 @@ try:
                         label_count += 1
 
         except Exception as e:
-            # print(f"    ⚠️ 오류 (행 {idx+2}): {e}")
-            pass
+            print(f"    ⚠️ 라벨 오류 (시트 {idx+2}행): {e}")
         
         # 리스트에 추가
         new_img_paths.append([final_img_path])
@@ -203,6 +243,8 @@ try:
     print(f"🎉 [ Cell 7-1 ] 완료! (엑셀 수식은 안전하게 보호되었습니다)")
     print(f"    ✅ 경로 동기화: {updated_count}건")
     print(f"    🏷️ 라벨 생성: {label_count}개 상품")
+    if skipped_names:
+        print(f"    ⚠️ 라벨 못 만든 상품: {len(skipped_names)}개 (위 '라벨 건너뜀' 줄 확인)")
 
 except Exception as e:
     print(f"❌ 실행 중 오류 발생: {e}")

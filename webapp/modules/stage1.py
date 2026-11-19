@@ -1560,6 +1560,32 @@ def run_stage1(config: dict, log, progress, should_stop):
                 token = token.replace(cn, ko)
             return token
 
+        _tr_cache = {}
+        _tr_fail = {'gemini': 0, 'google': 0, 'ok': 0}
+
+        def _gemini_translate(text):
+            """제미나이로 중국어 옵션명 번역. 실패하면 None."""
+            if not model:
+                return None
+            prompt = (
+                "다음 중국어 상품 옵션명을 자연스러운 한국어로 번역해. "
+                "숫자, 단위(cm, mm, kg 등), 영문은 그대로 두고, "
+                "설명 없이 번역 결과 한 줄만 출력해.\n\n" + str(text)
+            )
+            try:
+                r = model.generate_content(prompt, request_options={"timeout": 30})
+                t = (getattr(r, "text", "") or "").strip().split("\n")[0].strip().strip('"').strip()
+                if t:
+                    _tr_fail['ok'] += 1
+                    if _tr_fail['ok'] == 1:
+                        print("      ✅ 제미나이 번역 작동 중")
+                return t or None
+            except Exception as e:
+                _tr_fail['gemini'] += 1
+                if _tr_fail['gemini'] <= 2:
+                    print(f"      ⚠️ 제미나이 번역 실패: {str(e)[:150]}")
+                return None
+
         def translate_if_chinese(text):
             if not text:
                 return text
@@ -1574,12 +1600,22 @@ def run_stage1(config: dict, log, progress, should_stop):
                     ko_token = _normalize_unit_token(token)
                     ko_unit = _normalize_unit_token(unit_m.group())
                     raw_tokens.append((ko_token, ko_unit))
-            # 2) \ubc88\uc5ed
-            try:
-                time.sleep(0.2)
-                translated = translator_ai.translate(text)
-            except Exception:
-                return text
+            # 2) \ubc88\uc5ed (\uc81c\ubbf8\ub098\uc774 \uc6b0\uc120 -> \uc2e4\ud328 \uc2dc \uad6c\uae00 \ubb34\ub8cc \ubc88\uc5ed) 20261006
+            if text in _tr_cache:
+                translated = _tr_cache[text]
+            else:
+                translated = _gemini_translate(text)
+                if not translated:
+                    try:
+                        time.sleep(0.2)
+                        translated = translator_ai.translate(text)
+                    except Exception as e:
+                        _tr_fail['google'] += 1
+                        if _tr_fail['google'] <= 2:
+                            print(f"      ⚠️ 구글 무료 번역도 실패: {str(e)[:120]}")
+                        translated = None
+                if translated and not re.search(r'[\u4e00-\u9fff]', translated):
+                    _tr_cache[text] = translated
             if not translated:
                 return text
             if not raw_tokens:

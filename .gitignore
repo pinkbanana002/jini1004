@@ -41,3 +41,4 @@ chrome_profile_stage1/
 webapp/.venv312/
 temp_downloads/
 gitstatus.txt
+.env
